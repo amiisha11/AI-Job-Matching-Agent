@@ -107,6 +107,7 @@ def clear_local_session() -> None:
         "setup_confirm",
         "setup_dev_otp",
         "setup_notice",
+        "setup_otp_sent_at",
         "login_password",
         "signup_password",
         "signup_confirm",

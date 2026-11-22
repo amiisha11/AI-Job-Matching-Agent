@@ -1,6 +1,8 @@
 """Login, sign up, and account setup screens."""
 
+import math
 import re
+import time
 
 import streamlit as st
 
@@ -9,6 +11,10 @@ from auth_session import store_login
 from components import page_header, select_page
 
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+OTP_RESEND_SECONDS = 60
+OTP_REQUEST_ACCEPTED = (
+    "If an eligible profile exists, a verification code has been sent to the registered email address."
+)
 
 
 def _password_problem(password: str, confirm: str | None = None) -> str | None:
@@ -93,11 +99,26 @@ def _submit_signup() -> None:
     st.session_state.nav = "My Profile"
 
 
+def _seconds_until_resend() -> int:
+    """Return how long the resend button must wait. The first request is not delayed."""
+    sent_at = st.session_state.get("setup_otp_sent_at")
+    if not isinstance(sent_at, (int, float)):
+        return 0
+    remaining = OTP_RESEND_SECONDS - (time.time() - float(sent_at))
+    if remaining <= 0:
+        return 0
+    return math.ceil(remaining)
+
+
 def _submit_send_otp() -> None:
     email = str(st.session_state.get("setup_email") or "")
     problem = _email_problem(email)
     if problem:
         st.session_state.auth_notice = problem
+        return
+    remaining = _seconds_until_resend()
+    if st.session_state.get("setup_otp_requested") and remaining > 0:
+        st.session_state.auth_notice = f"Resend temporarily unavailable. Wait {remaining} seconds."
         return
     body, error = api_request(
         "POST",
@@ -108,10 +129,9 @@ def _submit_send_otp() -> None:
         st.session_state.auth_notice = error or "Email delivery is temporarily unavailable."
         return
     st.session_state.setup_otp_requested = True
-    st.session_state.setup_notice = (
-        "Verification code sent. It expires in 10 minutes. "
-        "If an eligible profile exists, the code was sent to that email address."
-    )
+    st.session_state.setup_otp_sent_at = time.time()
+    detail = body.get("detail")
+    st.session_state.setup_notice = detail.strip() if isinstance(detail, str) and detail.strip() else OTP_REQUEST_ACCEPTED
     dev_otp = body.get("dev_otp")
     st.session_state.setup_dev_otp = dev_otp if isinstance(dev_otp, str) and dev_otp.isdigit() and len(dev_otp) == 6 else ""
 
@@ -150,6 +170,7 @@ def _submit_setup() -> None:
     st.session_state.setup_dev_otp = ""
     st.session_state.setup_notice = ""
     st.session_state.setup_otp_requested = False
+    st.session_state.setup_otp_sent_at = None
     store_login(body["token"], candidate)
     st.session_state.nav = "My Profile"
     st.toast("Password successfully set.")
@@ -244,9 +265,11 @@ def page_setup(status: dict | None, status_error: str | None) -> None:
         st.text_input("Email", key="setup_email", placeholder="name@example.com")
         st.button("Send OTP", type="primary", on_click=_submit_send_otp)
         if st.session_state.get("setup_otp_requested"):
+            remaining = _seconds_until_resend()
+            wait = f" Resend is available in {remaining} seconds." if remaining else " Another code can be requested after 60 seconds."
             st.markdown(
-                "<p class='form-hint'>The code expires in 10 minutes. "
-                "You can request another code 60 seconds after the last request.</p>",
+                "<p class='form-hint'>The code expires in 10 minutes."
+                f"{wait}</p>",
                 unsafe_allow_html=True,
             )
             st.text_input("Verification code", key="setup_otp", max_chars=6)

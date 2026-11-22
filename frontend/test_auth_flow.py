@@ -176,15 +176,24 @@ def test_login_signup_and_setup_keep_the_password_out_of_session():
         assert any("email" in item.value.casefold() for item in setup.error)
         assert not any(url.endswith("/auth/setup/send-otp") for _, url, _, _ in calls)
 
-        _labeled(setup.text_input, "Email").set_value("ada@example.com")
+        _labeled(setup.text_input, "Email").set_value("Ada@Example.com")
         _labeled(setup.button, "Send OTP").click().run()
-        assert any("Verification code sent" in item.value for item in setup.success)
+        send_calls = [call for call in calls if call[1].endswith("/auth/setup/send-otp")]
+        assert send_calls[-1][0] == "POST"
+        assert send_calls[-1][2] == {"email": "ada@example.com"}
+        assert "claim_code" not in send_calls[-1][2]
+        assert any("If an eligible profile exists" in item.value for item in setup.success)
+        assert not any(item.value.casefold().startswith("verification code sent") for item in setup.success)
         _labeled(setup.text_input, "Verification code").set_value("123456")
         _labeled(setup.text_input, "New password").set_value(SECRET)
         _labeled(setup.text_input, "Confirm new password").set_value("different")
+        before_password = len(calls)
         _labeled(setup.button, "Set password").click().run()
         assert any("do not match" in item.value for item in setup.error)
         assert setup.session_state["auth_token"] is None
+        assert not any(
+            call[1].endswith("/auth/setup-password") for call in calls[before_password:]
+        )
 
         _labeled(setup.text_input, "Verification code").set_value("000000")
         _labeled(setup.text_input, "New password").set_value(SECRET)
@@ -196,10 +205,39 @@ def test_login_signup_and_setup_keep_the_password_out_of_session():
         _labeled(setup.text_input, "New password").set_value(SECRET)
         _labeled(setup.text_input, "Confirm new password").set_value(SECRET)
         _labeled(setup.button, "Set password").click().run()
+        saved = [call for call in calls if call[1].endswith("/auth/setup-password")]
+        assert saved[-1][2] == {"email": "ada@example.com", "otp": "123456", "password": SECRET}
+        assert "claim_code" not in saved[-1][2]
         assert setup.session_state["candidate_id"] == 9
+        assert setup.session_state["nav"] == "My Profile"
         assert setup.session_state["profile"]["email"] == "ada@example.com"
         assert setup.session_state["setup_otp"] == ""
+        assert setup.session_state["setup_password"] == ""
+        assert setup.session_state["setup_dev_otp"] == ""
         assert SECRET not in _session_text(setup)
+
+
+def test_resend_otp_waits_sixty_seconds():
+    clock = {"now": 1_000.0}
+
+    def now():
+        return clock["now"]
+
+    with patch("auth_pages.time.time", side_effect=now):
+        with _mocked_auth("Account setup") as (setup, calls):
+            _labeled(setup.text_input, "Email").set_value("ada@example.com")
+            _labeled(setup.button, "Send OTP").click().run()
+            clock["now"] = 1_030.0
+            _labeled(setup.button, "Resend OTP").click().run()
+            sent = [call for call in calls if call[1].endswith("/auth/setup/send-otp")]
+            assert len(sent) == 1
+            assert any("Resend temporarily unavailable" in item.value for item in setup.error)
+            clock["now"] = 1_061.0
+            _labeled(setup.button, "Resend OTP").click().run()
+            sent = [call for call in calls if call[1].endswith("/auth/setup/send-otp")]
+            assert len(sent) == 2
+            assert sent[1][2] == {"email": "ada@example.com"}
+            assert "claim_code" not in sent[1][2]
 
 
 def test_logout_and_expired_session_return_to_login():
@@ -212,12 +250,14 @@ def test_logout_and_expired_session_return_to_login():
         setup_otp="123456",
         setup_dev_otp="123456",
         setup_password=SECRET,
+        setup_otp_sent_at=1_000.0,
     ) as (home, calls):
         _labeled(home.button, "Log out").click().run()
         assert home.session_state["auth_token"] is None
         assert home.session_state["setup_otp"] == ""
         assert home.session_state["setup_dev_otp"] == ""
         assert home.session_state["setup_password"] == ""
+        assert home.session_state["setup_otp_sent_at"] == ""
         assert home.session_state["candidate_id"] is None
         assert home.session_state["nav"] == "Login"
         assert any(url.endswith("/auth/logout") for _, url, _, _ in calls)
