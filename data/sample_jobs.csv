@@ -1,0 +1,21 @@
+title,company,location,description,required_skills,min_years_experience
+Python Developer,BrightStack,Bengaluru,"Build and maintain internal Python services, write tests, and review API changes with the backend team.",Python|FastAPI|PostgreSQL,2
+Backend Developer,Harbor Systems,Hyderabad,"Design JSON APIs for the payments product, model data in PostgreSQL, and keep the services reliable.",Python|Django|PostgreSQL|Redis,3
+Frontend Developer,PixelRoute,Pune,"Create responsive web screens in React, match the design system, and fix usability issues found in testing.",JavaScript|React|HTML|CSS,2
+Full Stack Developer,Nimbus Labs,Bengaluru,"Ship features across the React interface and the Python API, including forms, validation, and database updates.",JavaScript|React|Python|PostgreSQL,3
+Software Engineer Intern,CampusGrid,Chennai,"Help the engineering team with small Python tasks, bug fixes, and documentation during a six-month internship.",Python|Git|SQL,0
+AI/ML Intern,Helix Learn,Bengaluru,"Clean training data, run notebook experiments, and summarize model results for the applied machine learning team.",Python|Machine Learning|Pandas,0
+Data Analyst,Harbor Analytics,Mumbai,"Prepare weekly business reports, write SQL extracts, and explain trends to operations managers.",SQL|Excel|Tableau|Python,1
+Data Scientist,Saffron AI,Hyderabad,"Explore customer data, build prediction models, and write clear notes about what the model learned.",Python|Statistics|Machine Learning|SQL,2
+Generative AI Intern,PromptWorks,Gurugram,"Test prompts, review model answers, and help the team evaluate a small document assistant.",Python|Prompt Engineering|LLMs,0
+Java Developer,Deccan Pay,Pune,"Develop Spring Boot services for account features, write unit tests, and work with the database team.",Java|Spring Boot|SQL,3
+DevOps Intern,CloudNest,Noida,"Assist with build scripts, Docker images, and deployment checklists for the internship program.",Linux|Docker|Git,0
+Cloud Engineer,Monsoon Cloud,Bengaluru,"Maintain AWS environments, write Terraform changes, and improve deployment reliability.",AWS|Docker|Terraform|Linux,2
+SQL Developer,Ledgerline,Mumbai,"Write reporting queries, review table design, and help analysts get trustworthy numbers from PostgreSQL.",SQL|PostgreSQL|Data Modeling,2
+Machine Learning Engineer,ModelMint,Hyderabad,"Train and deploy machine learning models, monitor their quality, and collaborate with the data platform team.",Python|Machine Learning|PyTorch|SQL,3
+Web Developer,BazaarByte,Jaipur,"Build marketing and catalog pages, keep them fast on mobile, and update shared React components.",HTML|CSS|JavaScript|React,1
+API Developer,RelayStack,Bengaluru,"Design and document REST endpoints, validate request data, and connect the services to PostgreSQL.",Python|FastAPI|REST|PostgreSQL,2
+Business Analyst,Northbridge Advisory,Delhi,"Gather requirements, turn them into user stories, and check reports with stakeholders.",SQL|Excel|Communication|Requirements Analysis,2
+Data Engineering Intern,PipelineHaus,Pune,"Support the data team by cleaning files, writing simple SQL checks, and learning the daily pipeline.",Python|SQL|ETL,0
+QA Automation Intern,TestLoom,Chennai,"Write beginner-friendly automated checks for web forms and record clear bug reports.",Python|Selenium|Testing,0
+NLP Intern,LanguageLab,Bengaluru,"Label text samples, try basic language models, and report how well they classify support messages.",Python|NLP|Machine Learning,0
