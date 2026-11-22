@@ -121,6 +121,99 @@ def jooble_attribution(job) -> str:
     )
 
 
+def observed_filter_options(jobs) -> dict:
+    """Workplace, employment, and experience values actually present on these listings."""
+    workplaces = []
+    employment = []
+    bands = []
+    for job in jobs or []:
+        if not isinstance(job, dict):
+            continue
+        workplace = _known_workplace(job)
+        if workplace and workplace not in workplaces:
+            workplaces.append(workplace)
+        for kind in _known_employment(job):
+            if kind not in employment:
+                employment.append(kind)
+        for band in _experience_bands(job):
+            if band not in bands:
+                bands.append(band)
+    experience = []
+    if bands:
+        experience.append({"value": "any", "label": "Any"})
+        labels = {
+            "entry": "Internship / entry-level",
+            "0-2": "0–2 years",
+            "3-5": "3–5 years",
+            "5plus": "5+ years",
+        }
+        experience.extend({"value": band, "label": labels[band]} for band in ("entry", "0-2", "3-5", "5plus") if band in bands)
+    return {
+        "workplaces": [{"value": value, "label": WORKPLACE_LABELS[value]} for value in workplaces],
+        "employment_types": [{"value": value, "label": EMPLOYMENT_LABELS[value]} for value in employment],
+        "experience": experience,
+    }
+
+
+def keep_jobs_for_filters(jobs, workplace: str, employment: str, experience: str) -> list:
+    """Apply a selected detail filter. A missing field does not count as a match."""
+    kept = []
+    for job in jobs or []:
+        if not isinstance(job, dict):
+            continue
+        if workplace not in {"", "any"} and _known_workplace(job) != workplace:
+            continue
+        if employment not in {"", "any"} and employment not in _known_employment(job):
+            continue
+        if experience not in {"", "any"} and not _experience_selected(job, experience):
+            continue
+        kept.append(job)
+    return kept
+
+
+def _known_workplace(job: dict) -> str:
+    token = " ".join(str(job.get("workplace") or "").split()).casefold().replace("-", "_").replace(" ", "_")
+    if token in {"on_site"}:
+        token = "onsite"
+    return token if token in WORKPLACE_LABELS else ""
+
+
+def _known_employment(job: dict) -> set[str]:
+    found = set()
+    aliases = {"temp": "temporary", "intern": "internship"}
+    for name in ("contract_time", "contract_type"):
+        token = " ".join(str(job.get(name) or "").split()).casefold().replace("-", "_").replace(" ", "_")
+        token = aliases.get(token, token)
+        if token in EMPLOYMENT_LABELS:
+            found.add(token)
+    return found
+
+
+def _experience_bands(job: dict) -> set[str]:
+    """Bands for a stored minimum. A snippet or an unmatchable listing has none."""
+    if job_is_unmatchable(job):
+        return set()
+    value = job.get("min_experience")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return set()
+    found = set()
+    if value == 0:
+        found.add("entry")
+    if 0 <= value <= 2:
+        found.add("0-2")
+    if 3 <= value <= 5:
+        found.add("3-5")
+    if value >= 5:
+        found.add("5plus")
+    return found
+
+
+def _experience_selected(job: dict, selected: str) -> bool:
+    if selected == "unspecified":
+        return not _experience_bands(job)
+    return selected in _experience_bands(job)
+
+
 def omit_repeated_jobs(existing, incoming) -> list:
     """Keep a live row only when it is not the same listing already on screen."""
     urls, ids, triples = set(), set(), set()

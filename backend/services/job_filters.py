@@ -137,7 +137,7 @@ def build_filter_metadata(jobs, categories=None, category_error: str | None = No
         "countries": _country_options(jobs),
         "workplaces": _option_list(_present_workplaces(jobs), WORKPLACE_LABELS),
         "employment_types": _option_list(_present_employment(jobs), EMPLOYMENT_LABELS),
-        "experience": list(EXPERIENCE_OPTIONS),
+        "experience": _experience_options(jobs),
         "salary_currencies": _currencies(jobs),
         "sorts": list(SORT_OPTIONS),
         "category_status": status,
@@ -203,6 +203,20 @@ def _currencies(jobs) -> list[str]:
             continue
         found.append(currency)
     return found
+
+
+def _experience_options(jobs) -> list[dict]:
+    """Offer a band only when a matchable listing has a structured minimum in that band."""
+    present = []
+    for option in EXPERIENCE_OPTIONS:
+        value = option["value"]
+        if value in {"any", "unspecified"}:
+            continue
+        if any(_known_experience(job) is not None and _experience_matches(job, value) for job in jobs or []):
+            present.append(option)
+    if not present:
+        return []
+    return [{"value": "any", "label": "Any"}, *present]
 
 
 def _option_list(values, labels) -> list[dict]:

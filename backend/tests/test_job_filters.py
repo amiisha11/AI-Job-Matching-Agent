@@ -170,6 +170,86 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(build_filter_metadata([], first, error)["category_status"], "unavailable")
         clear_category_cache()
 
+    def test_detail_filters_come_only_from_supplied_values(self):
+        empty = build_filter_metadata([])
+        self.assertEqual(empty["workplaces"], [])
+        self.assertEqual(empty["employment_types"], [])
+        self.assertEqual(empty["experience"], [])
+
+        missing = build_filter_metadata(
+            [
+                listing(
+                    workplace="",
+                    contract_time="",
+                    contract_type=None,
+                    min_experience=0,
+                    is_matchable=False,
+                    requirements_available=False,
+                    description="5 years of Python in a remote internship",
+                )
+            ]
+        )
+        self.assertEqual(missing["workplaces"], [])
+        self.assertEqual(missing["employment_types"], [])
+        self.assertEqual(missing["experience"], [])
+
+        populated = build_filter_metadata(
+            [
+                listing(workplace="remote", contract_time="full_time", min_experience=0),
+                listing(id=2, workplace="on-site", contract_type="permanent", min_experience=6),
+                listing(
+                    id=3,
+                    source="jooble",
+                    contract_time="contract",
+                    min_experience=0,
+                    is_matchable=False,
+                    requirements_available=False,
+                ),
+            ]
+        )
+        self.assertEqual(
+            [item["value"] for item in populated["workplaces"]],
+            ["remote", "onsite"],
+        )
+        self.assertEqual(
+            [item["value"] for item in populated["employment_types"]],
+            ["full_time", "permanent", "contract"],
+        )
+        self.assertEqual(
+            [item["value"] for item in populated["experience"]],
+            ["any", "entry", "0-2", "5plus"],
+        )
+        self.assertNotIn("unspecified", [item["value"] for item in populated["experience"]])
+
+        combined = filter_jobs(
+            [
+                listing(id=1, source_country="in", category_tag="it-jobs", location="Bengaluru", workplace="remote"),
+                listing(id=2, source_country="gb", category_tag="legal-jobs", location="London", workplace="onsite"),
+                listing(id=3, source_country="in", category_tag="it-jobs", location="Pune"),
+            ],
+            search_from_params(
+                {"country": "in", "category": "it-jobs", "location": "ben", "workplace": "remote", "q": "Python"}
+            ),
+        )
+        self.assertEqual([item["id"] for item in combined], [1])
+
+    def test_matching_weights_stay_70_20_10(self):
+        from types import SimpleNamespace
+
+        from services.matching import score_job
+
+        score = score_job(
+            SimpleNamespace(skills=["Python"], preferred_roles=["Developer"], preferred_locations=["London"]),
+            SimpleNamespace(
+                title="Python Developer",
+                location="London",
+                required_skills=["Python"],
+                requirements_available=True,
+                is_matchable=True,
+            ),
+        )
+        self.assertEqual((score.skill_score, score.role_score, score.location_score, score.total_score), (70.0, 20.0, 10.0, 100.0))
+
 
 if __name__ == "__main__":
     unittest.main()

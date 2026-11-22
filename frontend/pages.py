@@ -35,7 +35,9 @@ from display import (
     job_heading,
     job_is_unmatchable,
     job_key,
+    keep_jobs_for_filters,
     listing_notes_html,
+    observed_filter_options,
     match_quality,
     matches_by_job,
     real_skills,
@@ -1227,7 +1229,13 @@ def page_discover() -> None:
         "Saved jobs could not be read.",
         "Loading saved jobs.",
     )
-    choices = _discover_choices()
+    preview, _preview_error = _load_jooble_results(
+        st.session_state.get("discover_query", ""),
+        st.session_state.get("discover_country", "worldwide"),
+        st.session_state.get("discover_location_text", ""),
+        st.session_state.get("discover_industry", "all"),
+    )
+    choices = _extend_filter_choices(_discover_choices(), preview)
     query, industry, country, location_text, workplace, employment, experience, currency, salary_min, salary_max, sort_by = _discover_controls(choices)
     params = _discover_params(
         query, industry, country, location_text, workplace, employment, experience, currency, salary_min, salary_max
@@ -1241,6 +1249,7 @@ def page_discover() -> None:
         st.warning(live_error)
     if live_jobs:
         jobs = [*jobs, *omit_repeated_jobs(jobs, live_jobs)]
+    jobs = keep_jobs_for_filters(jobs, workplace, employment, experience)
     if filters_error:
         st.warning(filters_error)
     if saved_error:
@@ -1291,7 +1300,7 @@ def _load_discover_filters() -> str | None:
         "countries": [],
         "workplaces": [],
         "employment_types": [],
-        "experience": [{"value": "any", "label": "Any"}],
+        "experience": [],
         "salary_currencies": [],
         "sorts": [{"value": "newest", "label": "Newest first"}, {"value": "match_score", "label": "Match score"}],
         "category_status": "unavailable",
@@ -1308,7 +1317,7 @@ def _discover_choices() -> dict:
         "countries": _choice_rows(meta.get("countries")),
         "workplaces": _choice_rows(meta.get("workplaces")),
         "employment_types": _choice_rows(meta.get("employment_types")),
-        "experience": _choice_rows(meta.get("experience")) or [{"value": "any", "label": "Any"}],
+        "experience": _choice_rows(meta.get("experience")),
         "salary_currencies": [str(item) for item in meta.get("salary_currencies") or [] if str(item).strip()],
         "sorts": _choice_rows(meta.get("sorts")) or [{"value": "newest", "label": "Newest first"}],
         "category_status": meta.get("category_status") or "ready",
@@ -1329,18 +1338,62 @@ def _choice_rows(value) -> list[dict]:
     return rows
 
 
+def _extend_filter_choices(choices: dict, live_jobs: list) -> dict:
+    """Add filter values that appear on live results and are absent from the stored catalogue."""
+    observed = observed_filter_options(live_jobs)
+    extended = dict(choices)
+    for key in ("workplaces", "employment_types", "experience"):
+        extended[key] = _merge_options(choices.get(key) or [], observed[key])
+    return extended
+
+
+def _merge_options(stored: list, observed: list) -> list:
+    merged = []
+    seen = set()
+    for item in [*stored, *observed]:
+        value = str(item.get("value") or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        merged.append(item)
+    if not any(item["value"] not in {"any", "unspecified"} for item in merged):
+        return []
+    if not any(item["value"] == "any" for item in merged):
+        return [{"value": "any", "label": "Any"}, *merged]
+    return merged
+
+
+def _meaningful_options(rows: list[dict]) -> list[dict]:
+    """Drop a list that would only offer Any or an unspecified placeholder."""
+    real = [item for item in rows if item["value"] not in {"any", "unspecified"}]
+    if not real:
+        return []
+    if not any(item["value"] == "any" for item in rows):
+        return [{"value": "any", "label": "Any"}, *rows]
+    return rows
+
+
 def _discover_controls(choices: dict):
     industries = [{"value": "all", "label": "All industries"}, *choices["categories"], {"value": "unspecified", "label": "Other / Not specified"}]
     countries = [{"value": "worldwide", "label": "Worldwide"}, *choices["countries"]]
-    workplaces = [{"value": "any", "label": "Any"}, *choices["workplaces"]]
-    employment_types = [{"value": "any", "label": "Any"}, *choices["employment_types"]]
-    experience = choices["experience"]
+    workplaces = _meaningful_options(choices["workplaces"])
+    employment_types = _meaningful_options(choices["employment_types"])
+    experience = _meaningful_options(choices["experience"])
     sorts = choices["sorts"]
     _keep_choice("discover_industry", industries, "all")
     _keep_choice("discover_country", countries, "worldwide")
-    _keep_choice("discover_workplace", workplaces, "any")
-    _keep_choice("discover_employment", employment_types, "any")
-    _keep_choice("discover_experience_band", experience, "any")
+    if workplaces:
+        _keep_choice("discover_workplace", workplaces, "any")
+    else:
+        st.session_state.discover_workplace = "any"
+    if employment_types:
+        _keep_choice("discover_employment", employment_types, "any")
+    else:
+        st.session_state.discover_employment = "any"
+    if experience:
+        _keep_choice("discover_experience_band", experience, "any")
+    else:
+        st.session_state.discover_experience_band = "any"
     _keep_choice("discover_sort", sorts, "newest")
     currencies = ["any", *choices["salary_currencies"]]
     if st.session_state.get("discover_salary_currency") not in currencies:
@@ -1362,17 +1415,26 @@ def _discover_controls(choices: dict):
             country = st.selectbox("Country", [item["value"] for item in countries], key="discover_country", format_func=_label_for(countries))
         with location_col:
             location_text = st.text_input("Location", key="discover_location_text", placeholder="City, state, or region")
-        workplace_col, employment_col, experience_col = st.columns(3)
-        with workplace_col:
-            workplace = st.selectbox("Work arrangement", [item["value"] for item in workplaces], key="discover_workplace", format_func=_label_for(workplaces))
-            if len(workplaces) == 1:
-                st.caption("Stored listings do not include a workplace.")
-        with employment_col:
-            employment = st.selectbox("Employment type", [item["value"] for item in employment_types], key="discover_employment", format_func=_label_for(employment_types))
-            if len(employment_types) == 1:
-                st.caption("Stored listings do not include an employment type.")
-        with experience_col:
-            experience = st.selectbox("Experience", [item["value"] for item in experience], key="discover_experience_band", format_func=_label_for(experience))
+        detail_filters = [
+            ("Work arrangement", workplaces, "discover_workplace"),
+            ("Employment type", employment_types, "discover_employment"),
+            ("Experience", experience, "discover_experience_band"),
+        ]
+        visible_filters = [item for item in detail_filters if item[1]]
+        selected = {"Work arrangement": "any", "Employment type": "any", "Experience": "any"}
+        if visible_filters:
+            columns = st.columns(len(visible_filters))
+            for column, (label, rows, key) in zip(columns, visible_filters):
+                with column:
+                    selected[label] = st.selectbox(
+                        label,
+                        [item["value"] for item in rows],
+                        key=key,
+                        format_func=_label_for(rows),
+                    )
+        workplace = selected["Work arrangement"]
+        employment = selected["Employment type"]
+        experience = selected["Experience"]
         salary_col, sort_col, clear_col = st.columns([2, 2, 1], vertical_alignment="bottom")
         salary_min = ""
         salary_max = ""
@@ -1467,6 +1529,10 @@ def _load_jooble_results(query, country, location_text, industry) -> tuple[list,
     params = {"country": code, "q": str(query).strip()}
     if str(location_text or "").strip():
         params["location"] = str(location_text).strip()
+    cache_key = (code, params["q"], params.get("location", ""))
+    cache = st.session_state.get("jooble_results")
+    if isinstance(cache, dict) and cache_key in cache:
+        return cache[cache_key]
     body, error = authed_request("GET", f"/jobs/jooble?{urlencode(params)}")
     if error:
         return [], error
@@ -1475,7 +1541,12 @@ def _load_jooble_results(query, country, location_text, industry) -> tuple[list,
     rows = body.get("jobs")
     if not isinstance(rows, list):
         return [], "Jooble search could not be read."
-    return [row for row in rows if isinstance(row, dict)], None
+    found = ([row for row in rows if isinstance(row, dict)], None)
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[cache_key] = found
+    st.session_state.jooble_results = cache
+    return found
 
 
 def _load_discover_results(params: dict):

@@ -19,6 +19,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent
 if str(FRONTEND_DIR) not in sys.path:
     sys.path.insert(0, str(FRONTEND_DIR))
 
+from display import keep_jobs_for_filters, observed_filter_options
 from test_home_profile_saved import APP_PATH, _markdown
 
 JOBS = [
@@ -716,6 +717,69 @@ def test_jooble_live_results_stay_beside_the_catalog():
         _labeled(app.text_input, "Search jobs").set_value("Engineer").run()
         assert any("Jooble did not respond in time." in item.value for item in app.warning)
         assert "Backend Engineer" in _markdown(app)
+
+
+def test_empty_detail_filters_are_hidden_and_live_values_are_not_invented():
+    blank = {
+        **FILTERS,
+        "workplaces": [],
+        "employment_types": [],
+        "experience": [],
+        "salary_currencies": [],
+    }
+    with _discover(filters=blank) as (app, _calls):
+        labels = [box.label for box in app.selectbox]
+        assert "Industry" in labels
+        assert "Country" in labels
+        assert "Work arrangement" not in labels
+        assert "Employment type" not in labels
+        assert "Experience" not in labels
+        assert any(item.label == "Location" for item in app.text_input)
+        assert "Data Analyst" in _markdown(app)
+
+    live = [
+        {
+            "id": "jooble-in-1",
+            "title": "Platform Engineer",
+            "company": "Northwind",
+            "location": "Bengaluru",
+            "source": "jooble",
+            "source_country": "in",
+            "contract_time": "full_time",
+            "workplace": "",
+            "min_experience": 0,
+            "is_matchable": False,
+            "requirements_available": False,
+            "description": "Remote internship for someone with 5 years of experience.",
+        }
+    ]
+    with _discover(filters=blank, jooble_jobs=live) as (app, _calls):
+        _labeled(app.selectbox, "Country").set_value("in").run()
+        _labeled(app.text_input, "Search jobs").set_value("Engineer").run()
+        labels = [box.label for box in app.selectbox]
+        text = _markdown(app)
+        assert "Employment type" in labels
+        assert "Work arrangement" not in labels
+        assert "Experience" not in labels
+        assert "Employment type: Full-time" in text
+        assert "Work arrangement not specified" in text
+
+
+def test_detail_filters_ignore_missing_metadata():
+    jobs = [
+        {"id": 1, "title": "Analyst", "workplace": "remote", "contract_time": "full_time", "min_experience": 4, "is_matchable": True},
+        {"id": 2, "title": "Writer", "description": "Remote full-time role, 5 years", "min_experience": 0, "is_matchable": False},
+    ]
+    assert observed_filter_options([]) == {"workplaces": [], "employment_types": [], "experience": []}
+    assert observed_filter_options(jobs[1:])["experience"] == []
+    assert observed_filter_options(jobs[1:])["workplaces"] == []
+    options = observed_filter_options(jobs)
+    assert [item["value"] for item in options["workplaces"]] == ["remote"]
+    assert [item["value"] for item in options["employment_types"]] == ["full_time"]
+    assert "3-5" in [item["value"] for item in options["experience"]]
+    assert keep_jobs_for_filters(jobs, "any", "any", "any") == jobs
+    assert [job["id"] for job in keep_jobs_for_filters(jobs, "remote", "full_time", "3-5")] == [1]
+    assert keep_jobs_for_filters(jobs, "hybrid", "any", "any") == []
 
 
 def test_empty_industry_is_not_reported_as_an_api_error():
