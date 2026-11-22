@@ -19,10 +19,13 @@ from services.auth_service import (
     login_account,
     public_candidate,
     register_account,
+    change_password,
+    confirm_reset,
+    send_reset_otp,
     send_setup_otp,
     setup_password,
 )
-from services.email_delivery import deliver_setup_code
+from services.email_delivery import deliver_reset_code, deliver_setup_code
 from settings import dev_otp_fallback_allowed, get_email_otp_pepper, smtp_is_configured
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -45,6 +48,21 @@ class SendOtpBody(BaseModel):
     """The email that should receive a setup code."""
 
     email: str = Field(min_length=1, max_length=320)
+
+
+class ChangePasswordBody(BaseModel):
+    """The signed-in user's current password and the replacement."""
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=1, max_length=128)
+
+
+class ResetConfirmBody(BaseModel):
+    """A reset code and the replacement password. The profile name is not proof."""
+
+    email: str = Field(min_length=1, max_length=320)
+    otp: str = Field(min_length=1, max_length=12)
+    new_password: str = Field(min_length=1, max_length=128)
 
 
 class SetupBody(BaseModel):
@@ -144,6 +162,62 @@ def setup(body: SetupBody, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict:
             get_email_otp_pepper(),
         )
     )
+
+
+def _accepted(result: AuthResult) -> JSONResponse:
+    if not result.ok:
+        raise HTTPException(status_code=result.status, detail=result.message)
+    payload = {"detail": result.message}
+    if result.dev_otp:
+        payload["dev_otp"] = result.dev_otp
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=payload)
+
+
+@router.post("/password-reset/send-otp")
+def send_reset(body: SendOtpBody, request: Request, repo: SqlAuthRepo = Depends(get_auth_repo)) -> JSONResponse:
+    """Ask for a reset code. The response does not say whether the email exists."""
+    return _accepted(
+        send_reset_otp(
+            repo,
+            body.email,
+            datetime.now(timezone.utc),
+            pepper=get_email_otp_pepper(),
+            smtp_ready=smtp_is_configured(),
+            dev_fallback=dev_otp_fallback_allowed(),
+            send_email=deliver_reset_code,
+            client_ip=_client_ip(request),
+        )
+    )
+
+
+@router.post("/password-reset/confirm")
+def reset_password(body: ResetConfirmBody, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict:
+    """Set a new password from a reset code. The caller must log in again."""
+    result = confirm_reset(
+        repo,
+        body.email,
+        body.otp,
+        body.new_password,
+        datetime.now(timezone.utc),
+        get_email_otp_pepper(),
+    )
+    if not result.ok:
+        raise HTTPException(status_code=result.status, detail=result.message)
+    return {"detail": result.message}
+
+
+@router.post("/change-password")
+def change(
+    body: ChangePasswordBody,
+    raw_token: str = Depends(bearer_token),
+    current: Candidate = Depends(get_current_candidate),
+    repo: SqlAuthRepo = Depends(get_auth_repo),
+) -> dict:
+    """Replace the signed-in user's password. Other sessions for that user are signed out."""
+    result = change_password(repo, current, body.current_password, body.new_password, raw_token)
+    if not result.ok:
+        raise HTTPException(status_code=result.status, detail=result.message)
+    return {"detail": result.message}
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

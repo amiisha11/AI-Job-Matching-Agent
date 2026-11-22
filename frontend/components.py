@@ -62,6 +62,7 @@ _NAV_ICONS = {
     "Login": ":material/login:",
     "Sign Up": ":material/person_add:",
     "Account setup": ":material/key:",
+    "Forgot password": ":material/lock_reset:",
 }
 
 

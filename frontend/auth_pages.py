@@ -37,6 +37,9 @@ def _show_notice() -> None:
     notice = st.session_state.pop("auth_notice", None)
     if notice:
         st.error(notice)
+    done = st.session_state.pop("auth_success", None)
+    if done:
+        st.success(done)
 
 
 def _status_line(status: dict | None, status_error: str | None) -> str:
@@ -99,15 +102,19 @@ def _submit_signup() -> None:
     st.session_state.nav = "My Profile"
 
 
-def _seconds_until_resend() -> int:
-    """Return how long the resend button must wait. The first request is not delayed."""
-    sent_at = st.session_state.get("setup_otp_sent_at")
+def _seconds_until(sent_key: str) -> int:
+    """Return how long another code request must wait. The first request is not delayed."""
+    sent_at = st.session_state.get(sent_key)
     if not isinstance(sent_at, (int, float)):
         return 0
     remaining = OTP_RESEND_SECONDS - (time.time() - float(sent_at))
     if remaining <= 0:
         return 0
     return math.ceil(remaining)
+
+
+def _seconds_until_resend() -> int:
+    return _seconds_until("setup_otp_sent_at")
 
 
 def _submit_send_otp() -> None:
@@ -176,6 +183,127 @@ def _submit_setup() -> None:
     st.toast("Password successfully set.")
 
 
+def _submit_change_password() -> None:
+    current = str(st.session_state.get("change_current") or "")
+    new_password = str(st.session_state.get("change_new") or "")
+    confirm = str(st.session_state.get("change_confirm") or "")
+    st.session_state.change_current = ""
+    st.session_state.change_new = ""
+    st.session_state.change_confirm = ""
+    if not current:
+        st.session_state.change_notice = "Enter your current password."
+        return
+    problem = _password_problem(new_password, confirm)
+    if problem:
+        st.session_state.change_notice = problem
+        return
+    _body, error = api_request(
+        "POST",
+        "/auth/change-password",
+        {"current_password": current, "new_password": new_password},
+        token=st.session_state.get("auth_token"),
+    )
+    if error:
+        st.session_state.change_notice = error
+        return
+    st.session_state.change_success = "Password updated."
+
+
+def _submit_forgot_send() -> None:
+    email = str(st.session_state.get("forgot_email") or "")
+    problem = _email_problem(email)
+    if problem:
+        st.session_state.auth_notice = problem
+        return
+    remaining = _seconds_until("forgot_otp_sent_at")
+    if st.session_state.get("forgot_otp_requested") and remaining > 0:
+        st.session_state.auth_notice = f"Resend temporarily unavailable. Wait {remaining} seconds."
+        return
+    body, error = api_request(
+        "POST",
+        "/auth/password-reset/send-otp",
+        {"email": email.strip().lower()},
+    )
+    if error or not isinstance(body, dict):
+        st.session_state.auth_notice = error or "Email delivery is temporarily unavailable."
+        return
+    st.session_state.forgot_otp_requested = True
+    st.session_state.forgot_otp_sent_at = time.time()
+    detail = body.get("detail")
+    st.session_state.forgot_notice = detail.strip() if isinstance(detail, str) and detail.strip() else OTP_REQUEST_ACCEPTED
+    dev_otp = body.get("dev_otp")
+    st.session_state.forgot_dev_otp = dev_otp if isinstance(dev_otp, str) and dev_otp.isdigit() and len(dev_otp) == 6 else ""
+
+
+def _submit_forgot_reset() -> None:
+    email = str(st.session_state.get("forgot_email") or "")
+    new_password = str(st.session_state.get("forgot_password") or "")
+    confirm = str(st.session_state.get("forgot_confirm") or "")
+    otp = str(st.session_state.get("forgot_otp") or "").strip()
+    st.session_state.forgot_password = ""
+    st.session_state.forgot_confirm = ""
+    if not st.session_state.get("forgot_otp_requested"):
+        st.session_state.auth_notice = "Send a verification code first."
+        return
+    if not otp.isdigit() or len(otp) != 6:
+        st.session_state.auth_notice = "Enter the six-digit verification code."
+        return
+    problem = _email_problem(email) or _password_problem(new_password, confirm)
+    if problem:
+        st.session_state.auth_notice = problem
+        return
+    _body, error = api_request(
+        "POST",
+        "/auth/password-reset/confirm",
+        {
+            "email": email.strip().lower(),
+            "otp": otp,
+            "new_password": new_password,
+        },
+    )
+    if error:
+        st.session_state.auth_notice = error or "The password could not be saved."
+        return
+    _clear_forgot_state()
+    st.session_state.auth_success = "Password updated. Log in with the new password."
+    st.session_state.nav = "Login"
+
+
+def _clear_forgot_state() -> None:
+    for key in ("forgot_otp", "forgot_password", "forgot_confirm", "forgot_dev_otp", "forgot_notice"):
+        st.session_state[key] = ""
+    st.session_state.forgot_otp_requested = False
+    st.session_state.forgot_otp_sent_at = None
+
+
+def _return_to_login() -> None:
+    _clear_forgot_state()
+    select_page("Login")
+
+
+def render_change_password() -> None:
+    """Ask the signed-in user for the current password before replacing it."""
+    error = st.session_state.pop("change_notice", None)
+    done = st.session_state.pop("change_success", None)
+    if error:
+        st.error(error)
+    if done:
+        st.success(done)
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<p class='section-label'>Change password</p>"
+                "<p class='form-hint'>Enter the password you use to log in, then choose a new one. "
+                "Other signed-in browsers will need to log in again.</p>"
+            ),
+            unsafe_allow_html=True,
+        )
+        st.text_input("Current password", key="change_current", type="password", max_chars=128)
+        st.text_input("New password", key="change_new", type="password", max_chars=128)
+        st.text_input("Confirm new password", key="change_confirm", type="password", max_chars=128)
+        st.button("Update password", on_click=_submit_change_password)
+
+
 def page_login(status: dict | None, status_error: str | None) -> None:
     """Ask for the email and password of an existing account."""
     page_header(
@@ -204,6 +332,7 @@ def page_login(status: dict | None, status_error: str | None) -> None:
             st.button("Create an account", on_click=select_page, args=("Sign Up",))
         with setup_col:
             st.button("Set a password for an existing profile", on_click=select_page, args=("Account setup",))
+        st.button("Forgot password", on_click=select_page, args=("Forgot password",))
 
 
 def page_signup(status: dict | None, status_error: str | None) -> None:
@@ -279,3 +408,49 @@ def page_setup(status: dict | None, status_error: str | None) -> None:
             st.button("Set password", type="primary", on_click=_submit_setup)
         st.markdown("<p class='auth-switch'>Ready to sign in?</p>", unsafe_allow_html=True)
         st.button("Back to login", on_click=select_page, args=("Login",))
+
+
+def page_forgot(status: dict | None, status_error: str | None) -> None:
+    """Reset a password for an account that already has one."""
+    page_header(
+        "Reset your password",
+        "Use the email on an account that already has a password.",
+        "Account",
+    )
+    _show_notice()
+    sent = st.session_state.get("forgot_notice")
+    if sent:
+        st.success(sent)
+    dev_otp = str(st.session_state.get("forgot_dev_otp") or "")
+    if dev_otp:
+        st.warning(
+            "Development only. Email delivery is not configured, so the code is shown here and was not sent. "
+            "This does not appear when the app is running in production."
+        )
+        st.code(dev_otp)
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<div class='auth-brand'><span class='sidebar-mark'>AJ</span><span>AI Job Matching</span></div>"
+                "<p class='section-label auth-card'>Forgot password</p>"
+                "<p class='form-hint'>Enter the account email. A six-digit code confirms that you can read that inbox.</p>"
+                f"<p class='status-line'>{_status_line(status, status_error)}</p>"
+            ),
+            unsafe_allow_html=True,
+        )
+        st.text_input("Email", key="forgot_email", placeholder="name@example.com")
+        st.button("Send OTP", type="primary", on_click=_submit_forgot_send)
+        if st.session_state.get("forgot_otp_requested"):
+            remaining = _seconds_until("forgot_otp_sent_at")
+            wait = f" Resend is available in {remaining} seconds." if remaining else " Another code can be requested after 60 seconds."
+            st.markdown(
+                f"<p class='form-hint'>The code expires in 10 minutes.{wait}</p>",
+                unsafe_allow_html=True,
+            )
+            st.text_input("Verification code", key="forgot_otp", max_chars=6)
+            st.button("Resend OTP", on_click=_submit_forgot_send)
+            st.text_input("New password", key="forgot_password", type="password", max_chars=128)
+            st.text_input("Confirm new password", key="forgot_confirm", type="password", max_chars=128)
+            st.button("Reset password", type="primary", on_click=_submit_forgot_reset)
+        st.markdown("<p class='auth-switch'>Remembered it?</p>", unsafe_allow_html=True)
+        st.button("Back to login", on_click=_return_to_login)

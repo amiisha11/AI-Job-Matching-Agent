@@ -35,7 +35,7 @@ def ensure_auth_schema() -> None:
     """Add the password column and session table without changing existing rows."""
     from sqlalchemy import text
 
-    from models import AuthSession, Base, ClaimGuard, ClaimToken, EmailSetupOTP, OtpGuard, OtpSend
+    from models import AuthSession, Base, ClaimGuard, ClaimToken, EmailResetOTP, EmailSetupOTP, OtpGuard, OtpSend
 
     try:
         Base.metadata.create_all(
@@ -45,6 +45,7 @@ def ensure_auth_schema() -> None:
                 ClaimToken.__table__,
                 ClaimGuard.__table__,
                 EmailSetupOTP.__table__,
+                EmailResetOTP.__table__,
                 OtpSend.__table__,
                 OtpGuard.__table__,
             ],

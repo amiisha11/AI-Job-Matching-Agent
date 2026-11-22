@@ -20,12 +20,31 @@ class EmailDeliveryError(Exception):
 
 
 def deliver_setup_code(recipient: str, otp: str) -> None:
-    """Send the six-digit code. Raises EmailDeliveryError when delivery fails."""
+    """Send the account-setup code. Raises EmailDeliveryError when delivery fails."""
+    _deliver(
+        recipient,
+        otp,
+        "Your AI Job Matching Agent verification",
+        "If you did not request a password for this profile, you can ignore this email.",
+    )
+
+
+def deliver_reset_code(recipient: str, otp: str) -> None:
+    """Send the password-reset code. The subject does not contain the code."""
+    _deliver(
+        recipient,
+        otp,
+        "Reset your AI Job Matching Agent password",
+        "If you did not request a password reset, you can ignore this email.",
+    )
+
+
+def _deliver(recipient: str, otp: str, subject: str, ignore_line: str) -> None:
     settings = get_smtp_settings()
     if not settings["host"] or not settings["from_email"]:
         raise EmailDeliveryError("not-configured")
     message = EmailMessage()
-    message["Subject"] = "Your AI Job Matching Agent verification"
+    message["Subject"] = subject
     message["From"] = settings["from_email"]
     message["To"] = recipient
     message.set_content(
@@ -36,7 +55,7 @@ def deliver_setup_code(recipient: str, otp: str) -> None:
                 f"Your verification code is {otp}.",
                 "It expires in 10 minutes.",
                 "Do not share this code.",
-                "If you did not request a password for this profile, you can ignore this email.",
+                ignore_line,
             ]
         )
     )
@@ -45,7 +64,7 @@ def deliver_setup_code(recipient: str, otp: str) -> None:
             "<p><strong>AI Job Matching Agent</strong></p>"
             f"<p>Your verification code is <strong>{otp}</strong>.</p>"
             "<p>It expires in 10 minutes. Do not share this code.</p>"
-            "<p>If you did not request a password for this profile, you can ignore this email.</p>"
+            f"<p>{ignore_line}</p>"
         ),
         subtype="html",
     )

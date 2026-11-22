@@ -287,6 +287,141 @@ def setup_password(
     return _ok(200, token, candidate)
 
 
+def change_password(
+    repo,
+    candidate,
+    current_password: str,
+    new_password: str,
+    raw_token: str | None,
+    iterations: int = HASH_ITERATIONS,
+) -> AuthResult:
+    """Replace the signed-in candidate's password and sign out their other sessions."""
+    if candidate is None or not getattr(candidate, "password_hash", None):
+        verify_password(current_password or "", _dummy_hash())
+        return _fail(409, "This profile has no password yet. Use Account setup to verify your email.")
+    problem = _password_error(new_password)
+    if problem:
+        return _fail(422, problem)
+    if not verify_password(current_password, candidate.password_hash):
+        return _fail(401, "The current password is incorrect.")
+    repo.replace_password_keep_session(candidate, hash_password(new_password, iterations), hash_token(raw_token or ""))
+    return AuthResult(ok=True, status=200, message="Password updated.")
+
+
+def send_reset_otp(
+    repo,
+    email: str,
+    now: datetime,
+    pepper: str,
+    smtp_ready: bool,
+    dev_fallback: bool,
+    send_email,
+    client_ip: str | None = None,
+) -> AuthResult:
+    """Request a reset code for an account that already has a password.
+
+    Unknown emails and passwordless profiles get the same response and no code.
+    A setup code is never stored in the reset table.
+    """
+    cleaned_email = email.strip().lower()
+    problem = _email_error(cleaned_email)
+    if problem:
+        return _fail(422, problem)
+    if not pepper:
+        return _fail(503, "Email verification is not configured.")
+    if not smtp_ready and not dev_fallback:
+        return _fail(503, "Email delivery is not configured.")
+
+    moment = _as_utc(now)
+    limited = _otp_send_limit(repo, cleaned_email, client_ip, moment)
+    if limited is not None:
+        return limited
+    repo.record_otp_send(cleaned_email, _clean_ip(client_ip), moment)
+
+    candidate = repo.find_by_email(cleaned_email)
+    if candidate is None or not candidate.password_hash:
+        return AuthResult(ok=True, status=202, message=OTP_SENT)
+
+    repo.retire_unused_resets(candidate.id, moment)
+    raw_otp = generate_otp()
+    repo.save_reset_otp(candidate.id, hash_otp(raw_otp, pepper), moment, moment + OTP_LIFETIME)
+    if dev_fallback and not smtp_ready:
+        return AuthResult(ok=True, status=202, message=OTP_SENT, dev_otp=raw_otp)
+    try:
+        send_email(cleaned_email, raw_otp)
+    except Exception:
+        repo.retire_unused_resets(candidate.id, moment)
+        return _fail(503, "Email delivery is temporarily unavailable.")
+    return AuthResult(ok=True, status=202, message=OTP_SENT)
+
+
+def confirm_reset(
+    repo,
+    email: str,
+    otp: str,
+    new_password: str,
+    now: datetime,
+    pepper: str,
+    iterations: int = HASH_ITERATIONS,
+) -> AuthResult:
+    """Set a new password from a reset code and sign out every existing session."""
+    cleaned_email = email.strip().lower()
+    problem = _email_error(cleaned_email) or _password_error(new_password)
+    if problem:
+        return _fail(422, problem)
+    code = str(otp or "").strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return _fail(422, "Enter the six-digit verification code.")
+    if not pepper:
+        return _fail(503, "Email verification is not configured.")
+
+    moment = _as_utc(now)
+    guard = repo.get_otp_guard(cleaned_email)
+    locked_until = _as_utc(guard.locked_until) if guard is not None and guard.locked_until else None
+    if locked_until is not None and locked_until > moment:
+        _dummy_otp_check(pepper)
+        return _fail(429, "Too many attempts. Try again in 15 minutes.")
+
+    candidate = repo.find_by_email(cleaned_email)
+    matched = _matching_reset(repo, candidate, code, pepper, moment) if candidate is not None else None
+    if matched is None or not getattr(candidate, "password_hash", None):
+        _dummy_otp_check(pepper)
+        _record_reset_failure(repo, cleaned_email, candidate, guard, moment)
+        return _fail(401, "The verification code is not valid.")
+
+    password_hash = hash_password(new_password, iterations)
+    if not repo.consume_reset_otp(matched, candidate, password_hash, moment):
+        _record_reset_failure(repo, cleaned_email, candidate, guard, moment)
+        return _fail(401, "The verification code is not valid.")
+    repo.clear_otp_guard(cleaned_email)
+    return AuthResult(ok=True, status=200, message="Password updated. Log in with the new password.")
+
+
+def _matching_reset(repo, candidate, code: str, pepper: str, now: datetime):
+    wanted = hash_otp(code, pepper)
+    found = None
+    for row in repo.unused_resets(candidate.id):
+        if hmac.compare_digest(row.otp_hash, wanted):
+            found = row
+    if found is None or _as_utc(found.expires_at) <= now:
+        return None
+    return found
+
+
+def _record_reset_failure(repo, email: str, candidate, guard, now: datetime) -> None:
+    attempts = 0 if guard is None else int(guard.failed_attempts or 0)
+    attempts += 1
+    locked_until = None
+    if candidate is not None:
+        repo.bump_reset_failures(candidate.id)
+    if attempts >= OTP_ATTEMPT_LIMIT:
+        locked_until = now + OTP_LOCK
+        attempts = 0
+        if candidate is not None:
+            repo.retire_unused_resets(candidate.id, now)
+    repo.save_otp_guard(email, attempts, locked_until)
+
+
 def _clean_ip(client_ip: str | None) -> str | None:
     if not client_ip:
         return None

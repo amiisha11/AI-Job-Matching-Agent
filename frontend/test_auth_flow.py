@@ -67,6 +67,21 @@ def _mocked_auth(page="Login", **state):
             return FakeResponse(
                 {"detail": "If an eligible profile exists, a verification code has been sent to the registered email address."}
             )
+        if method == "POST" and url.endswith("/auth/password-reset/send-otp"):
+            return FakeResponse(
+                {"detail": "If an eligible profile exists, a verification code has been sent to the registered email address."}
+            )
+        if method == "POST" and url.endswith("/auth/password-reset/confirm"):
+            if kwargs["json"].get("otp") != "123456":
+                return FakeResponse({"detail": "The verification code is not valid."}, 401)
+            assert "claim_code" not in kwargs["json"]
+            return FakeResponse({"detail": "Password updated. Log in with the new password."})
+        if method == "POST" and url.endswith("/auth/change-password"):
+            if kwargs["json"].get("current_password") != SECRET:
+                return FakeResponse({"detail": "The current password is incorrect."}, 401)
+            return FakeResponse({"detail": "Password updated."})
+        if method == "GET" and "/jobs/filters" in url:
+            return FakeResponse({"categories": [], "countries": []})
         if method == "POST" and url.endswith("/auth/setup-password"):
             if kwargs["json"].get("otp") != "123456":
                 return FakeResponse({"detail": "The verification code is not valid."}, 401)
@@ -238,6 +253,64 @@ def test_resend_otp_waits_sixty_seconds():
             assert len(sent) == 2
             assert sent[1][2] == {"email": "ada@example.com"}
             assert "claim_code" not in sent[1][2]
+
+
+def test_forgot_password_uses_a_reset_code_and_returns_to_login():
+    with _mocked_auth("Forgot password") as (page, calls):
+        _labeled(page.text_input, "Email").set_value("Ada@Example.com")
+        _labeled(page.button, "Send OTP").click().run()
+        sent = [call for call in calls if call[1].endswith("/auth/password-reset/send-otp")]
+        assert sent[-1][0] == "POST"
+        assert sent[-1][2] == {"email": "ada@example.com"}
+        assert any("If an eligible profile exists" in item.value for item in page.success)
+        _labeled(page.text_input, "Verification code").set_value("123456")
+        _labeled(page.text_input, "New password").set_value(SECRET)
+        _labeled(page.text_input, "Confirm new password").set_value("different")
+        _labeled(page.button, "Reset password").click().run()
+        assert any("do not match" in item.value for item in page.error)
+        assert page.session_state["auth_token"] is None
+
+        _labeled(page.text_input, "Verification code").set_value("123456")
+        _labeled(page.text_input, "New password").set_value(SECRET)
+        _labeled(page.text_input, "Confirm new password").set_value(SECRET)
+        _labeled(page.button, "Reset password").click().run()
+        saved = [call for call in calls if call[1].endswith("/auth/password-reset/confirm")]
+        assert saved[-1][2] == {"email": "ada@example.com", "otp": "123456", "new_password": SECRET}
+        assert "claim_code" not in saved[-1][2]
+        assert page.session_state["nav"] == "Login"
+        assert page.session_state["auth_token"] is None
+        assert page.session_state["forgot_otp"] == ""
+        assert page.session_state["forgot_password"] == ""
+        assert any("Log in with the new password" in item.value for item in page.success)
+
+
+def test_change_password_keeps_the_signed_in_session():
+    with _mocked_auth(
+        "My Profile",
+        auth_token="issued-token",
+        candidate_id=9,
+        candidate_name="Ada Lovelace",
+        profile=CANDIDATE,
+    ) as (page, calls):
+        _labeled(page.text_input, "Current password").set_value("wrong-horse")
+        _labeled(page.text_input, "New password").set_value("new-password")
+        _labeled(page.text_input, "Confirm new password").set_value("new-password")
+        _labeled(page.button, "Update password").click().run()
+        assert any("incorrect" in item.value.casefold() for item in page.error)
+        assert page.session_state["auth_token"] == "issued-token"
+
+        _labeled(page.text_input, "Current password").set_value(SECRET)
+        _labeled(page.text_input, "New password").set_value("new-password")
+        _labeled(page.text_input, "Confirm new password").set_value("new-password")
+        _labeled(page.button, "Update password").click().run()
+        changed = [call for call in calls if call[1].endswith("/auth/change-password")]
+        assert changed[-1][2] == {"current_password": SECRET, "new_password": "new-password"}
+        assert "email" not in changed[-1][2]
+        assert page.session_state["auth_token"] == "issued-token"
+        assert page.session_state["nav"] == "My Profile"
+        assert page.session_state["change_current"] == ""
+        assert page.session_state["change_new"] == ""
+        assert any("Password updated." in item.value for item in page.success)
 
 
 def test_logout_and_expired_session_return_to_login():

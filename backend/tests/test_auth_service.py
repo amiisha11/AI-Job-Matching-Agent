@@ -15,6 +15,8 @@ from services.auth_service import (
     OTP_SENT,
     EmailAlreadyUsed,
     authenticate,
+    change_password,
+    confirm_reset,
     end_session,
     generate_otp,
     hash_otp,
@@ -24,6 +26,7 @@ from services.auth_service import (
     owner_conflict,
     public_candidate,
     register_account,
+    send_reset_otp,
     send_setup_otp,
     setup_password,
     verify_password,
@@ -41,6 +44,7 @@ class MemoryRepo:
         self.people = []
         self.sessions = []
         self.otps = []
+        self.resets = []
         self.sends = []
         self.guards = {}
         self.next_id = 1
@@ -145,6 +149,48 @@ class MemoryRepo:
             return
         guard.failed_attempts = 0
         guard.locked_until = None
+
+    def save_reset_otp(self, candidate_id, otp_hash, created_at, expires_at):
+        row = SimpleNamespace(
+            id=self.next_otp_id,
+            candidate_id=candidate_id,
+            otp_hash=otp_hash,
+            created_at=created_at,
+            expires_at=expires_at,
+            used_at=None,
+            failed_attempts=0,
+        )
+        self.next_otp_id += 1
+        self.resets.append(row)
+        return row
+
+    def retire_unused_resets(self, candidate_id, used_at):
+        for row in self.resets:
+            if row.candidate_id == candidate_id and row.used_at is None:
+                row.used_at = used_at
+
+    def unused_resets(self, candidate_id):
+        return [row for row in self.resets if row.candidate_id == candidate_id and row.used_at is None]
+
+    def bump_reset_failures(self, candidate_id):
+        for row in self.unused_resets(candidate_id):
+            row.failed_attempts += 1
+
+    def consume_reset_otp(self, otp_row, candidate, password_hash, used_at):
+        if otp_row.used_at is not None:
+            return False
+        otp_row.used_at = used_at
+        candidate.password_hash = password_hash
+        self.sessions = [row for row in self.sessions if row.candidate_id != candidate.id]
+        return True
+
+    def replace_password_keep_session(self, candidate, password_hash, keep_token_hash):
+        candidate.password_hash = password_hash
+        self.sessions = [
+            row
+            for row in self.sessions
+            if row.candidate_id != candidate.id or row.token_hash == keep_token_hash
+        ]
 
 
 def test_password_hash_is_salted_and_checkable():
@@ -489,6 +535,235 @@ def test_generated_codes_are_six_digits_and_old_claim_text_is_rejected():
     assert first is True
     assert second is False
     assert existing.password_hash == "stored-hash"
+
+
+def _reset(repo, email, now, sent_to, smtp_ready=True, dev_fallback=False, client_ip=None):
+    return send_reset_otp(
+        repo,
+        email,
+        now,
+        PEPPER,
+        smtp_ready,
+        dev_fallback,
+        _sender(sent_to),
+        client_ip,
+    )
+
+
+def test_change_password_keeps_only_the_current_session():
+    repo = MemoryRepo()
+    created = register_account(repo, "Ada Lovelace", "ada@example.com", "correct-horse", NOW, FAST)
+    other = login_account(repo, "ada@example.com", "correct-horse", NOW)
+    stranger = register_account(repo, "Grace Hopper", "grace@example.com", "correct-horse", NOW, FAST)
+    short = change_password(repo, repo.people[0], "correct-horse", "short", created.token, FAST)
+    assert short.status == 422
+    assert verify_password("correct-horse", repo.people[0].password_hash)
+
+    wrong = change_password(repo, repo.people[0], "wrong-horse", "new-password", created.token, FAST)
+    assert wrong.status == 401
+    assert authenticate(repo, other.token, NOW).ok
+
+    updated = change_password(repo, repo.people[0], "correct-horse", "new-password", created.token, FAST)
+    assert updated.ok
+    assert updated.message == "Password updated."
+    assert "password_hash" not in (updated.candidate or {})
+    assert authenticate(repo, created.token, NOW).ok
+    assert authenticate(repo, other.token, NOW).status == 401
+    assert authenticate(repo, stranger.token, NOW).ok
+    assert login_account(repo, "ada@example.com", "correct-horse", NOW).status == 401
+    assert login_account(repo, "ada@example.com", "new-password", NOW).ok
+    assert verify_password("correct-horse", repo.people[1].password_hash)
+
+    blank = SimpleNamespace(
+        id=3,
+        name="No Password",
+        email="blank@example.com",
+        education=None,
+        skills=[],
+        preferred_roles=[],
+        preferred_locations=[],
+        years_experience=0,
+        password_hash=None,
+    )
+    refused = change_password(repo, blank, "correct-horse", "new-password", "session", FAST)
+    assert refused.status == 409
+    assert blank.password_hash is None
+
+
+def test_reset_otp_is_separate_from_account_setup():
+    repo = MemoryRepo()
+    existing = SimpleNamespace(
+        id=8,
+        name="Ada Lovelace",
+        email="ada@example.com",
+        education=None,
+        skills=["Python"],
+        preferred_roles=[],
+        preferred_locations=[],
+        years_experience=1,
+        password_hash=hash_password("correct-horse", FAST),
+    )
+    repo.people.append(existing)
+    kept = repo.start_session(existing.id, NOW, timedelta(hours=12))
+    sent = []
+    issued = _reset(repo, "Ada@Example.com", NOW, sent)
+    assert issued.status == 202
+    assert issued.dev_otp is None
+    assert sent[0][0] == "ada@example.com"
+    code = sent[0][1]
+    assert repo.resets[0].otp_hash == hash_otp(code, PEPPER)
+    assert code not in repo.resets[0].otp_hash
+    assert repo.otps == []
+
+    setup_try = setup_password(repo, "ada@example.com", "another-horse", code, NOW, PEPPER, FAST)
+    assert setup_try.status == 401
+    assert verify_password("correct-horse", existing.password_hash)
+
+    unknown = _reset(repo, "missing@example.com", NOW + timedelta(seconds=61), [])
+    assert unknown.status == 202
+    assert unknown.dev_otp is None
+    passwordless = _passwordless(4)
+    passwordless.email = "blank@example.com"
+    repo.people.append(passwordless)
+    skipped = _reset(repo, "blank@example.com", NOW + timedelta(seconds=122), [])
+    assert skipped.status == 202
+    assert all(row.candidate_id != passwordless.id for row in repo.resets)
+
+    expired = confirm_reset(repo, "ada@example.com", code, "new-password", NOW + timedelta(minutes=11), PEPPER, FAST)
+    assert expired.status == 401
+    assert verify_password("correct-horse", existing.password_hash)
+    fresh = []
+    _reset(repo, "ada@example.com", NOW + timedelta(minutes=12), fresh)
+    assert repo.resets[0].used_at is not None
+    current = fresh[0][1]
+    superseded = confirm_reset(repo, "ada@example.com", code, "new-password", NOW + timedelta(minutes=12), PEPPER, FAST)
+    assert superseded.status == 401
+
+    locked_repo = MemoryRepo()
+    locked_person = SimpleNamespace(**{**existing.__dict__, "password_hash": hash_password("correct-horse", FAST)})
+    locked_repo.people.append(locked_person)
+    locked_sent = []
+    _reset(locked_repo, "ada@example.com", NOW, locked_sent)
+    for _ in range(OTP_ATTEMPT_LIMIT):
+        assert confirm_reset(locked_repo, "ada@example.com", "000000", "new-password", NOW, PEPPER, FAST).status == 401
+    locked = confirm_reset(locked_repo, "ada@example.com", locked_sent[0][1], "new-password", NOW, PEPPER, FAST)
+    assert locked.status == 429
+    assert verify_password("correct-horse", locked_person.password_hash)
+    assert authenticate(repo, kept, NOW).ok
+
+    later = []
+    _reset(repo, "ada@example.com", NOW + timedelta(minutes=28), later)
+    done = confirm_reset(repo, "ada@example.com", later[0][1], "new-password", NOW + timedelta(minutes=28), PEPPER, FAST)
+    assert done.ok
+    assert done.token is None
+    assert done.message == "Password updated. Log in with the new password."
+    assert verify_password("new-password", existing.password_hash)
+    assert not verify_password("correct-horse", existing.password_hash)
+    assert authenticate(repo, kept, NOW + timedelta(minutes=28)).status == 401
+    reused = confirm_reset(repo, "ada@example.com", later[0][1], "third-password", NOW + timedelta(minutes=28), PEPPER, FAST)
+    assert reused.status == 401
+    assert verify_password("new-password", existing.password_hash)
+    signed_in = login_account(repo, "ada@example.com", "new-password", NOW + timedelta(minutes=28))
+    assert signed_in.ok
+
+    quiet = MemoryRepo()
+    quiet.people.append(
+        SimpleNamespace(
+            id=1,
+            name="Ada",
+            email="ada@example.com",
+            education=None,
+            skills=[],
+            preferred_roles=[],
+            preferred_locations=[],
+            years_experience=0,
+            password_hash=hash_password("correct-horse", FAST),
+        )
+    )
+    hidden = _reset(quiet, "ada@example.com", NOW, [], smtp_ready=False, dev_fallback=False)
+    assert hidden.status == 503
+    assert hidden.dev_otp is None
+    shown = _reset(quiet, "ada@example.com", NOW, [], smtp_ready=False, dev_fallback=True)
+    assert shown.dev_otp and len(shown.dev_otp) == 6
+    assert quiet.resets[0].otp_hash == hash_otp(shown.dev_otp, PEPPER)
+
+    def _boom(_email, _otp):
+        raise OSError("mailbox refused the message")
+
+    failed = send_reset_otp(
+        quiet,
+        "ada@example.com",
+        NOW + timedelta(seconds=61),
+        PEPPER,
+        True,
+        False,
+        _boom,
+    )
+    assert failed.status == 503
+    assert failed.dev_otp is None
+    assert quiet.resets
+    assert all(row.used_at is not None for row in quiet.resets)
+
+
+def test_change_password_route_changes_only_the_signed_in_candidate():
+    from routes.auth import ChangePasswordBody, change
+
+    repo = MemoryRepo()
+    owner = SimpleNamespace(
+        id=1,
+        name="Ada",
+        email="ada@example.com",
+        education=None,
+        skills=[],
+        preferred_roles=[],
+        preferred_locations=[],
+        years_experience=0,
+        password_hash=hash_password("correct-horse", FAST),
+    )
+    other = SimpleNamespace(
+        id=2,
+        name="Grace",
+        email="grace@example.com",
+        education=None,
+        skills=[],
+        preferred_roles=[],
+        preferred_locations=[],
+        years_experience=0,
+        password_hash=hash_password("correct-horse", FAST),
+    )
+    repo.people.extend([owner, other])
+    kept = repo.start_session(owner.id, NOW, timedelta(hours=12))
+    other_token = repo.start_session(other.id, NOW, timedelta(hours=12))
+    result = change(ChangePasswordBody(current_password="correct-horse", new_password="new-password"), kept, owner, repo)
+    assert result == {"detail": "Password updated."}
+    assert authenticate(repo, kept, NOW).ok
+    assert authenticate(repo, other_token, NOW).ok
+    assert verify_password("new-password", owner.password_hash)
+    assert verify_password("correct-horse", other.password_hash)
+
+
+def test_reset_requests_share_the_send_limit():
+    repo = MemoryRepo()
+    repo.people.append(
+        SimpleNamespace(
+            id=1,
+            name="Ada",
+            email="ada@example.com",
+            education=None,
+            skills=[],
+            preferred_roles=[],
+            preferred_locations=[],
+            years_experience=0,
+            password_hash=hash_password("correct-horse", FAST),
+        )
+    )
+    assert _reset(repo, "ada@example.com", NOW, []).status == 202
+    early = _reset(repo, "ada@example.com", NOW + timedelta(seconds=30), [])
+    assert early.status == 429
+    for offset in (61, 122):
+        assert _reset(repo, "ada@example.com", NOW + timedelta(seconds=offset), []).status == 202
+    blocked = _reset(repo, "ada@example.com", NOW + timedelta(seconds=183), [])
+    assert blocked.status == 429
 
 
 def test_a_lost_insert_race_does_not_return_a_token():

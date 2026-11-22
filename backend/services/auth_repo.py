@@ -11,7 +11,16 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from models import AuthSession, Candidate, ClaimGuard, ClaimToken, EmailSetupOTP, OtpGuard, OtpSend
+from models import (
+    AuthSession,
+    Candidate,
+    ClaimGuard,
+    ClaimToken,
+    EmailResetOTP,
+    EmailSetupOTP,
+    OtpGuard,
+    OtpSend,
+)
 from services.auth_service import EmailAlreadyUsed, hash_token
 
 
@@ -215,6 +224,76 @@ class SqlAuthRepo:
             guard.failed_attempts = failed_attempts
             guard.locked_until = locked_until
         self.db.commit()
+
+    def save_reset_otp(self, candidate_id: int, otp_hash: str, created_at: datetime, expires_at: datetime) -> EmailResetOTP:
+        row = EmailResetOTP(
+            candidate_id=candidate_id,
+            otp_hash=otp_hash,
+            created_at=created_at,
+            expires_at=expires_at,
+            failed_attempts=0,
+        )
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def retire_unused_resets(self, candidate_id: int, used_at: datetime) -> None:
+        rows = self.db.scalars(
+            select(EmailResetOTP).where(
+                EmailResetOTP.candidate_id == candidate_id,
+                EmailResetOTP.used_at.is_(None),
+            )
+        )
+        for row in rows:
+            row.used_at = used_at
+        self.db.commit()
+
+    def unused_resets(self, candidate_id: int) -> list[EmailResetOTP]:
+        return list(
+            self.db.scalars(
+                select(EmailResetOTP).where(
+                    EmailResetOTP.candidate_id == candidate_id,
+                    EmailResetOTP.used_at.is_(None),
+                )
+            )
+        )
+
+    def bump_reset_failures(self, candidate_id: int) -> None:
+        for row in self.unused_resets(candidate_id):
+            row.failed_attempts = int(row.failed_attempts or 0) + 1
+        self.db.commit()
+
+    def consume_reset_otp(self, otp_row: EmailResetOTP, candidate: Candidate, password_hash: str, used_at: datetime) -> bool:
+        """Use one reset code, replace the password, and sign out every session."""
+        result = self.db.execute(
+            update(EmailResetOTP)
+            .where(EmailResetOTP.id == otp_row.id, EmailResetOTP.used_at.is_(None))
+            .values(used_at=used_at)
+        )
+        if result.rowcount != 1:
+            self.db.rollback()
+            return False
+        candidate.password_hash = password_hash
+        for row in list(self.db.scalars(select(AuthSession).where(AuthSession.candidate_id == candidate.id))):
+            self.db.delete(row)
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            return False
+        self.db.refresh(candidate)
+        return True
+
+    def replace_password_keep_session(self, candidate: Candidate, password_hash: str, keep_token_hash: str) -> None:
+        """Store a new password and delete every session except the current one."""
+        candidate.password_hash = password_hash
+        rows = list(self.db.scalars(select(AuthSession).where(AuthSession.candidate_id == candidate.id)))
+        for row in rows:
+            if row.token_hash != keep_token_hash:
+                self.db.delete(row)
+        self.db.commit()
+        self.db.refresh(candidate)
 
     def clear_otp_guard(self, email: str) -> None:
         guard = self.get_otp_guard(email)

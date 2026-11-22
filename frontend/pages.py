@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 
 import streamlit as st
 
+from auth_pages import render_change_password
 from auth_session import authed_request
 from home_metrics import (
     average_match_score,
@@ -622,6 +623,7 @@ def page_profile() -> None:
     _render_profile_header(profile if isinstance(profile, dict) else None)
     locked = isinstance(profile, dict) and bool(_display_text(profile.get("email")))
     _render_profile_editor(locked)
+    render_change_password()
 
 
 def _render_profile_header(profile: dict | None) -> None:

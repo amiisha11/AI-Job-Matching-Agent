@@ -289,6 +289,24 @@ class EmailSetupOTP(Base):
     failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class EmailResetOTP(Base):
+    """One emailed password-reset code. Only the HMAC is stored."""
+
+    __tablename__ = "email_reset_otps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("candidates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    otp_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class OtpSend(Base):
     """One OTP request, including requests that did not send a message."""
 

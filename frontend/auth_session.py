@@ -9,7 +9,7 @@ import streamlit as st
 from api import api_request
 from session_cookie import COOKIE_NAME, cookie_script
 
-PUBLIC_PAGES = ["Login", "Sign Up", "Account setup"]
+PUBLIC_PAGES = ["Login", "Sign Up", "Account setup", "Forgot password"]
 APP_PAGES = ["Home", "My Profile", "Discover Jobs", "Match Insights", "Saved Jobs", "Resume Centre"]
 LOGIN_AGAIN = {"Log in to continue.", "Your session has expired. Log in again."}
 PROFILE_WIDGET_KEYS = (
@@ -108,6 +108,17 @@ def clear_local_session() -> None:
         "setup_dev_otp",
         "setup_notice",
         "setup_otp_sent_at",
+        "forgot_otp",
+        "forgot_password",
+        "forgot_confirm",
+        "forgot_dev_otp",
+        "forgot_notice",
+        "forgot_otp_sent_at",
+        "change_current",
+        "change_new",
+        "change_confirm",
+        "change_notice",
+        "change_success",
         "login_password",
         "signup_password",
         "signup_confirm",
@@ -116,6 +127,8 @@ def clear_local_session() -> None:
             st.session_state[key] = ""
     if "setup_otp_requested" in st.session_state:
         st.session_state.setup_otp_requested = False
+    if "forgot_otp_requested" in st.session_state:
+        st.session_state.forgot_otp_requested = False
 
 
 def _clear_resume_state() -> None:

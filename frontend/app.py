@@ -14,7 +14,7 @@ if str(FRONTEND_DIR) not in sys.path:
     sys.path.insert(0, str(FRONTEND_DIR))
 
 from api import api_request
-from auth_pages import page_login, page_setup, page_signup
+from auth_pages import page_forgot, page_login, page_setup, page_signup
 from auth_session import apply_page_gate, reset_profile_form, restore_session, sync_session_cookie
 from components import render_sidebar
 from pages import page_discover, page_home, page_matches, page_profile, page_saved
@@ -61,6 +61,8 @@ elif page == "Sign Up":
     page_signup(status, status_error)
 elif page == "Account setup":
     page_setup(status, status_error)
+elif page == "Forgot password":
+    page_forgot(status, status_error)
 else:
     pages = {
         "Home": lambda: page_home(status, status_error),
