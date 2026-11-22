@@ -199,6 +199,9 @@ def _discover(
     preparation_status=200,
     preparation_error="",
     preparation_plan=None,
+    jooble_jobs=None,
+    jooble_status=200,
+    jooble_error="",
 ):
     calls = []
     catalog = JOBS if jobs is None else jobs
@@ -208,6 +211,12 @@ def _discover(
     def fake_request(method, url, **kwargs):
         calls.append((method, url, kwargs.get("json")))
         parsed = urlparse(url)
+        if method == "GET" and parsed.path.endswith("/jobs/jooble"):
+            if jooble_jobs is None and jooble_status < 400:
+                raise AssertionError(f"Unexpected API call {method} {url}")
+            if jooble_status >= 400:
+                return FakeResponse({"detail": jooble_error or "Jooble is unavailable."}, jooble_status)
+            return FakeResponse({"jobs": jooble_jobs, "detail": None})
         if method == "GET" and parsed.path.endswith("/jobs/filters"):
             if filters_status >= 400:
                 return FakeResponse({"detail": filters_error or "Categories are unavailable."}, filters_status)
@@ -635,6 +644,78 @@ def test_discover_filters_use_provider_categories_and_cache_them():
         assert ranked.find("Python Developer") < ranked.find("Solicitor")
         assert "Match score unavailable" in ranked
         assert sum(url.endswith("/jobs/filters") for _, url, _ in calls) == 1
+
+
+def test_jooble_live_results_stay_beside_the_catalog():
+    live = [
+        {
+            "id": "jooble-in-platform",
+            "title": "Platform Engineer",
+            "company": "",
+            "location": "Bengaluru",
+            "description": "Build the listing services for the marketplace.",
+            "required_skills": [],
+            "source": "jooble",
+            "publisher": "Example Board",
+            "source_country": "in",
+            "source_url": "https://in.jooble.org/jdp/501",
+            "posted_at": "2026-11-22T08:00:00",
+            "is_matchable": False,
+            "requirements_available": False,
+            "description_is_snippet": True,
+            "salary_min": 900000,
+            "salary_currency": "INR",
+            "contract_time": "full_time",
+        },
+        {
+            "id": "jooble-in-copy",
+            "title": "Backend Engineer",
+            "company": "Contoso",
+            "location": "Bengaluru",
+            "description": "Duplicate of a stored listing.",
+            "source": "jooble",
+            "source_country": "gb",
+            "source_url": "https://example.com/copy",
+        },
+    ]
+    catalog = [
+        {
+            "id": 8,
+            "title": "Backend Engineer",
+            "company": "Contoso",
+            "location": "Bengaluru",
+            "description": "Build the API that serves the job catalog.",
+            "required_skills": ["Python"],
+            "min_experience": 0,
+            "source": "adzuna",
+            "source_country": "in",
+        }
+    ]
+    with _discover(jobs=catalog, saved=[], matches=MATCHES, jooble_jobs=live) as (app, calls):
+        _labeled(app.selectbox, "Country").set_value("in").run()
+        _labeled(app.text_input, "Search jobs").set_value("Engineer").run()
+        text = _markdown(app)
+        jooble_calls = [url for _, url, _ in calls if "/jobs/jooble" in url]
+        assert len(jooble_calls) == 1
+        assert "country=in" in jooble_calls[0]
+        assert "q=Engineer" in jooble_calls[0]
+        assert "country=gb" not in jooble_calls[0]
+        assert "Platform Engineer" in text
+        assert "Company not provided" in text
+        assert "Source: Jooble" in text
+        assert "Publisher: Example Board" in text
+        assert "Salary: 900000 INR" in text
+        assert "https://in.jooble.org/" in text
+        assert "Match score unavailable" in text
+        assert any("Live results are not stored." in item.value for item in app.caption)
+        assert text.count("Backend Engineer") == 1
+        assert "Data Analyst" not in text
+
+    with _discover(jobs=catalog, saved=[], matches=MATCHES, jooble_status=503, jooble_error="Jooble did not respond in time.") as (app, _calls):
+        _labeled(app.selectbox, "Country").set_value("in").run()
+        _labeled(app.text_input, "Search jobs").set_value("Engineer").run()
+        assert any("Jooble did not respond in time." in item.value for item in app.warning)
+        assert "Backend Engineer" in _markdown(app)
 
 
 def test_empty_industry_is_not_reported_as_an_api_error():

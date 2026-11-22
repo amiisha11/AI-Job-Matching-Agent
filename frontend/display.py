@@ -4,6 +4,7 @@ Scores shown here are copied from API payloads. This module does not score jobs.
 """
 
 import html
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import streamlit as st
 
@@ -108,6 +109,78 @@ def unavailable_score_html(css_class: str = "discover-score") -> str:
     )
 
 
+def jooble_attribution(job) -> str:
+    """Credit Jooble on a live result and link to the regional site."""
+    if not isinstance(job, dict) or str(job.get("source") or "").casefold() != "jooble":
+        return ""
+    country = str(job.get("source_country") or "").strip().casefold()
+    href = "https://in.jooble.org/" if country == "in" else "https://uk.jooble.org/"
+    safe_href = html.escape(href, quote=True)
+    return (
+        f"<a class='adzuna-credit' href='{safe_href}' target='_blank' rel='noopener noreferrer'>Jooble</a>"
+    )
+
+
+def omit_repeated_jobs(existing, incoming) -> list:
+    """Keep a live row only when it is not the same listing already on screen."""
+    urls, ids, triples = set(), set(), set()
+    for job in existing or []:
+        _remember_job(job, urls, ids, triples)
+    kept = []
+    for job in incoming or []:
+        if not isinstance(job, dict):
+            continue
+        url, identity, triple = _job_keys(job)
+        if (url and url in urls) or (identity and identity in ids) or (triple and triple in triples):
+            continue
+        _remember_job(job, urls, ids, triples)
+        kept.append(job)
+    return kept
+
+
+def _remember_job(job, urls, ids, triples) -> None:
+    if not isinstance(job, dict):
+        return
+    url, identity, triple = _job_keys(job)
+    if url:
+        urls.add(url)
+    if identity:
+        ids.add(identity)
+    if triple:
+        triples.add(triple)
+
+
+def _job_keys(job: dict):
+    url = _compare_url(job.get("source_url"))
+    external = " ".join(str(job.get("external_job_id") or "").split())
+    source = str(job.get("source") or "").strip().casefold()
+    country = str(job.get("source_country") or "").strip().casefold()
+    identity = (source, country, external.casefold()) if external else None
+    title = " ".join(str(job.get("title") or "").split()).casefold()
+    company = " ".join(str(job.get("company") or "").split()).casefold()
+    location = " ".join(str(job.get("location") or "").split()).casefold()
+    triple = (title, company, location) if title and company and location else None
+    return url, identity, triple
+
+
+def _compare_url(value) -> str:
+    raw = str(value or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.netloc:
+        return ""
+    query = urlencode(
+        [
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if key.casefold() not in {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+        ]
+    )
+    path = parsed.path.rstrip("/") or "/"
+    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", query, ""))
+
+
 def adzuna_attribution(job) -> str:
     """The Adzuna wordmark required on each displayed advert, linked to the local site."""
     if not isinstance(job, dict) or str(job.get("source") or "").casefold() != "adzuna":
@@ -166,6 +239,10 @@ def experience_label(job) -> str:
 
 def _is_adzuna(job) -> bool:
     return isinstance(job, dict) and str(job.get("source") or "").casefold() == "adzuna"
+
+
+def _is_jooble(job) -> bool:
+    return isinstance(job, dict) and str(job.get("source") or "").casefold() == "jooble"
 
 
 def _posted_label(value) -> str:
@@ -236,11 +313,21 @@ def listing_notes_html(job) -> str:
     employment = employment_label(job)
     if employment:
         lines.append(f"Employment type: {employment}")
-    elif _is_adzuna(job):
+    elif _is_adzuna(job) or _is_jooble(job):
         lines.append(EMPLOYMENT_NOT_SPECIFIED)
-    if not real_skills(job) and (job_is_unmatchable(job) or _is_adzuna(job)):
+    if not real_skills(job) and (job_is_unmatchable(job) or _is_adzuna(job) or _is_jooble(job)):
         lines.append(SKILLS_NOT_PROVIDED)
-    if _is_adzuna(job):
+    if _is_jooble(job):
+        country_code = str(job.get("source_country") or "").strip().casefold()
+        country = COUNTRY_NAMES.get(country_code, country_code.upper() or "Not provided")
+        publisher = " ".join(str(job.get("publisher") or "").split())
+        lines.extend(["Source: Jooble", f"Country: {country}", f"Updated: {_posted_label(job.get('posted_at'))}"])
+        if publisher:
+            lines.append(f"Publisher: {publisher}")
+        if salary_label(job) != SALARY_NOT_PROVIDED:
+            lines.append(salary_label(job))
+        lines.append(workplace_label(job))
+    elif _is_adzuna(job):
         country_code = str(job.get("source_country") or "").strip().casefold()
         country = COUNTRY_NAMES.get(country_code, country_code.upper() or "Not provided")
         lines.extend(

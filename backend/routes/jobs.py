@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from database import get_db
 from deps import ensure_owner, get_current_candidate
 from models import Candidate, Job, SavedJob
+from providers.jooble.client import JoobleError, search_jobs as search_jooble_jobs
 from services.job_filters import JobSearch, build_filter_metadata, filter_jobs, salary_needs_currency, search_from_params
 
 router = APIRouter(tags=["jobs"])
@@ -170,6 +171,16 @@ def list_jobs(
             detail="Choose a currency before filtering by salary.",
         )
     return filter_jobs(rows, search)
+
+
+@router.get("/jobs/jooble")
+def read_jooble_jobs(country: str, q: str, location: str | None = None) -> dict:
+    """Search one Jooble region. The stored catalogue is not changed."""
+    try:
+        jobs = search_jooble_jobs(country=country, keywords=q, location=location)
+    except JoobleError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    return {"jobs": [job.as_dict() for job in jobs], "detail": None}
 
 
 @router.get("/jobs/{job_id}", response_model=JobRead)

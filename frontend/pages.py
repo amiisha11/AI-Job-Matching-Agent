@@ -29,6 +29,8 @@ from components import (
 from display import (
     COUNTRY_NAMES,
     adzuna_attribution,
+    jooble_attribution,
+    omit_repeated_jobs,
     initials,
     job_heading,
     job_is_unmatchable,
@@ -1214,7 +1216,7 @@ def page_discover() -> None:
     """Search stored listings and show scores from the matching service."""
     page_header(
         "Discover Jobs",
-        "Search the listings stored for matching. Scores come from your profile. Listings without skill requirements stay unscored.",
+        "Search the stored listings. A keyword search for India or the United Kingdom also checks Jooble live results.",
         "Jobs",
     )
     st.markdown("<div class='discover-page'></div>", unsafe_allow_html=True)
@@ -1234,6 +1236,11 @@ def page_discover() -> None:
     if jobs_error or not isinstance(jobs, list):
         st.error(jobs_error or "The job list could not be read.")
         return
+    live_jobs, live_error = _load_jooble_results(query, country, location_text, industry)
+    if live_error:
+        st.warning(live_error)
+    if live_jobs:
+        jobs = [*jobs, *omit_repeated_jobs(jobs, live_jobs)]
     if filters_error:
         st.warning(filters_error)
     if saved_error:
@@ -1450,6 +1457,27 @@ def _salary_number(value) -> int | None:
     return int(number) if number.is_integer() else number
 
 
+def _load_jooble_results(query, country, location_text, industry) -> tuple[list, str | None]:
+    """Search one Jooble region. Worldwide and stored-only filters do not call Jooble."""
+    code = str(country or "").strip().casefold()
+    if code not in {"in", "gb"} or not str(query or "").strip():
+        return [], None
+    if industry not in {"", "all", "unspecified"}:
+        return [], None
+    params = {"country": code, "q": str(query).strip()}
+    if str(location_text or "").strip():
+        params["location"] = str(location_text).strip()
+    body, error = authed_request("GET", f"/jobs/jooble?{urlencode(params)}")
+    if error:
+        return [], error
+    if not isinstance(body, dict):
+        return [], "Jooble search could not be read."
+    rows = body.get("jobs")
+    if not isinstance(rows, list):
+        return [], "Jooble search could not be read."
+    return [row for row in rows if isinstance(row, dict)], None
+
+
 def _load_discover_results(params: dict):
     """Fetch one filtered result set and reuse it while the filters stay the same."""
     key = tuple(sorted((name, str(value)) for name, value in params.items()))
@@ -1523,6 +1551,7 @@ def _render_job_detail(job: dict, match) -> None:
                 f"{listing_notes_html(job)}"
                 f"<div class='insight-panel'>{description}</div>"
                 f"{adzuna_attribution(job)}"
+                f"{jooble_attribution(job)}"
                 f"{original_listing_link(job)}"
             ),
             unsafe_allow_html=True,
@@ -1556,7 +1585,9 @@ def _render_job_card(job: dict, match, already_saved: bool) -> None:
                 f"{_card_heading(job)}"
                 f"{score}"
                 f"{listing_notes_html(job)}"
+                f"{_jooble_snippet(job)}"
                 f"{adzuna_attribution(job)}"
+                f"{jooble_attribution(job)}"
                 f"{original_listing_link(job)}"
             ),
             unsafe_allow_html=True,
@@ -1573,7 +1604,9 @@ def _render_job_card(job: dict, match, already_saved: bool) -> None:
         with detail_col:
             st.button("View details", key=f"detail-{job['id']}", on_click=_select_job, args=(job["id"],))
         with save_col:
-            if already_saved:
+            if not isinstance(job.get("id"), int):
+                st.caption("Live results are not stored.")
+            elif already_saved:
                 st.button("Saved", key=f"saved-state-{job['id']}", disabled=True)
             elif st.button("Save Job", key=f"save-{job['id']}", type="primary"):
                 save_job(job)
@@ -1582,8 +1615,13 @@ def _render_job_card(job: dict, match, already_saved: bool) -> None:
 def _card_heading(job: dict) -> str:
     """Short card text. The details panel keeps the full title."""
     title = html.escape(short_text(job.get("title") or "Untitled role", 72))
-    company = html.escape(short_text(job.get("company") or "", 48))
-    location = short_text(job.get("location") or "", 48)
+    company_text = short_text(job.get("company") or "", 48)
+    location_text = short_text(job.get("location") or "", 48)
+    if str(job.get("source") or "").casefold() == "jooble":
+        company_text = company_text or "Company not provided"
+        location_text = location_text or "Location not provided"
+    company = html.escape(company_text)
+    location = location_text
     country_code = str(job.get("source_country") or "").strip().casefold()
     country = COUNTRY_NAMES.get(country_code, country_code.upper())
     if country and country.casefold() not in location.casefold():
@@ -1683,9 +1721,22 @@ def _save_journal(job_id: int) -> None:
     st.session_state[f"prep-action-{job_id}"] = body.get("next_action") or ""
 
 
+def _jooble_snippet(job: dict) -> str:
+    if str(job.get("source") or "").casefold() != "jooble":
+        return ""
+    text = " ".join(str(job.get("description") or "").split())
+    if not text:
+        return ""
+    return f"<p class='detail-line'>{html.escape(short_text(text, 160))}</p>"
+
+
 def _render_preparation(job: dict) -> None:
     """Show the signed-in candidate's plan for this job only."""
     job_id = job.get("id")
+    if not isinstance(job_id, int):
+        with st.container(border=True):
+            st.caption("Live Jooble results stay on this page. They are not stored, so there is no preparation plan.")
+        return
     plan, error = _load_plan(job_id)
     with st.container(border=True):
         st.markdown(

@@ -60,6 +60,16 @@ def get_adzuna_app_key() -> str:
     return _configured_secret("ADZUNA_APP_KEY", _PLACEHOLDER_ADZUNA_APP_KEY)
 
 
+def get_jooble_api_key(country: str) -> str:
+    """Return the Jooble key for one country. Callers must not print it."""
+    code = str(country or "").strip().casefold()
+    if code == "in":
+        return _configured_secret("JOOBLE_IN_API_KEY", "your_jooble_in_api_key_here")
+    if code in {"gb", "uk"}:
+        return _configured_secret("JOOBLE_UK_API_KEY", "your_jooble_uk_api_key_here")
+    return ""
+
+
 def _configured_secret(name: str, placeholder: str) -> str:
     """Read one secret. Callers must not print the returned value."""
     value = os.getenv(name, "").strip()
