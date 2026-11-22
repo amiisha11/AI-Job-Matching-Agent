@@ -37,6 +37,14 @@ class AccountBody(Credentials):
     name: str = Field(min_length=1, max_length=200)
 
 
+class SetupBody(BaseModel):
+    """A claim code plus the password to set. The profile name is not proof."""
+
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=128)
+    claim_code: str = Field(min_length=1, max_length=200)
+
+
 class CandidatePublic(BaseModel):
     """Profile fields returned after login. There is no password field."""
 
@@ -84,9 +92,11 @@ def login(body: Credentials, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict
 
 
 @router.post("/setup-password", response_model=AuthResponse)
-def setup(body: AccountBody, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict:
-    """Set a password on a profile that does not have one yet."""
-    return _finish(setup_password(repo, body.name, body.email, body.password, datetime.now(timezone.utc)))
+def setup(body: SetupBody, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict:
+    """Set a password when a one-time claim code matches the stored hash."""
+    return _finish(
+        setup_password(repo, body.email, body.password, body.claim_code, datetime.now(timezone.utc))
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

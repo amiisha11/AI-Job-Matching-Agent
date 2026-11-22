@@ -94,12 +94,13 @@ def _submit_signup() -> None:
 
 
 def _submit_setup() -> None:
-    name = str(st.session_state.get("setup_name") or "")
     email = str(st.session_state.get("setup_email") or "")
     password = str(st.session_state.get("setup_password") or "")
+    claim_code = str(st.session_state.get("setup_claim") or "").strip()
     st.session_state.setup_password = ""
-    if not " ".join(name.split()):
-        st.session_state.auth_notice = "Enter your name."
+    st.session_state.setup_claim = ""
+    if not claim_code:
+        st.session_state.auth_notice = "A claim code is required."
         return
     problem = _email_problem(email) or _password_problem(password)
     if problem:
@@ -109,9 +110,9 @@ def _submit_setup() -> None:
         "POST",
         "/auth/setup-password",
         {
-            "name": " ".join(name.split()),
             "email": email.strip().lower(),
             "password": password,
+            "claim_code": claim_code,
         },
     )
     candidate = body.get("candidate") if isinstance(body, dict) else None
@@ -192,15 +193,14 @@ def page_setup(status: dict | None, status_error: str | None) -> None:
             (
                 "<div class='auth-brand'><span class='sidebar-mark'>AJ</span><span>AI Job Matching</span></div>"
                 "<p class='section-label auth-card'>Account setup</p>"
-                "<p class='form-hint'>Enter the same name that is stored on the profile, plus a new password. "
-                "Anyone who knows both the email and that exact name can claim a profile that has no password yet, "
-                "because this app cannot send a confirmation email.</p>"
+                "<p class='form-hint'>Enter the one-time claim code an administrator gave you, plus a new password. "
+                "Email and name alone cannot claim a profile.</p>"
                 f"<p class='status-line'>{_status_line(status, status_error)}</p>"
             ),
             unsafe_allow_html=True,
         )
-        st.text_input("Name", key="setup_name")
         st.text_input("Email", key="setup_email", placeholder="name@example.com")
+        st.text_input("Claim code", key="setup_claim", type="password")
         st.text_input("Password", key="setup_password", type="password", max_chars=128)
         st.button("Set password", type="primary", on_click=_submit_setup)
         st.markdown("<p class='auth-switch'>Ready to sign in?</p>", unsafe_allow_html=True)

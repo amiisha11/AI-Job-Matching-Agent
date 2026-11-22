@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from models import AuthSession, Candidate
+from models import AuthSession, Candidate, ClaimGuard, ClaimToken
 from services.auth_service import EmailAlreadyUsed, hash_token
 
 
@@ -73,3 +73,54 @@ class SqlAuthRepo:
 
     def candidate_by_id(self, candidate_id: int) -> Candidate | None:
         return self.db.get(Candidate, candidate_id)
+
+    def save_claim_token(self, candidate_id: int, token_hash: str, expires_at: datetime, created_at: datetime) -> None:
+        self.db.add(
+            ClaimToken(
+                candidate_id=candidate_id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+                created_at=created_at,
+            )
+        )
+        self.db.commit()
+
+    def retire_unused_claims(self, candidate_id: int, used_at: datetime) -> None:
+        rows = self.db.scalars(
+            select(ClaimToken).where(ClaimToken.candidate_id == candidate_id, ClaimToken.used_at.is_(None))
+        )
+        for row in rows:
+            row.used_at = used_at
+        self.db.commit()
+
+    def unused_claims(self, candidate_id: int) -> list[ClaimToken]:
+        return list(
+            self.db.scalars(
+                select(ClaimToken).where(ClaimToken.candidate_id == candidate_id, ClaimToken.used_at.is_(None))
+            )
+        )
+
+    def mark_claim_used(self, claim: ClaimToken, used_at: datetime) -> None:
+        claim.used_at = used_at
+        self.db.commit()
+
+    def get_claim_guard(self, email: str) -> ClaimGuard | None:
+        return self.db.scalar(select(ClaimGuard).where(ClaimGuard.email == email))
+
+    def save_claim_guard(self, email: str, failed_attempts: int, locked_until: datetime | None) -> None:
+        guard = self.get_claim_guard(email)
+        if guard is None:
+            guard = ClaimGuard(email=email, failed_attempts=failed_attempts, locked_until=locked_until)
+            self.db.add(guard)
+        else:
+            guard.failed_attempts = failed_attempts
+            guard.locked_until = locked_until
+        self.db.commit()
+
+    def clear_claim_guard(self, email: str) -> None:
+        guard = self.get_claim_guard(email)
+        if guard is None:
+            return
+        guard.failed_attempts = 0
+        guard.locked_until = None
+        self.db.commit()

@@ -12,7 +12,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent
 if str(FRONTEND_DIR) not in sys.path:
     sys.path.insert(0, str(FRONTEND_DIR))
 
-from session_cookie import cookie_script
+from session_cookie import cookie_is_secure, cookie_script
 
 APP_PATH = Path(__file__).resolve().parent / "app.py"
 SECRET = "correct-horse"
@@ -64,8 +64,10 @@ def _mocked_auth(page="Login", **state):
                 )
             return FakeResponse({"token": "issued-token", "candidate": CANDIDATE}, 201)
         if method == "POST" and url.endswith("/auth/setup-password"):
-            if kwargs["json"]["name"] != "Ada Lovelace":
-                return FakeResponse({"detail": "The name does not match the profile for that email."}, 401)
+            if not kwargs["json"].get("claim_code"):
+                return FakeResponse({"detail": "A claim code is required."}, 422)
+            if kwargs["json"]["claim_code"] != "claim-code":
+                return FakeResponse({"detail": "The claim code is not valid."}, 401)
             return FakeResponse({"token": "issued-token", "candidate": CANDIDATE})
         if method == "POST" and url.endswith("/auth/logout"):
             return FakeResponse({}, 204)
@@ -102,6 +104,10 @@ def test_cookie_script_sets_and_clears_without_a_password():
     assert "SameSite=Lax" in created
     assert "Max-Age=0" in cookie_script("")
     assert SECRET not in created
+    assert "Secure" not in created
+    with patch.dict("os.environ", {"COOKIE_SECURE": "true"}):
+        assert cookie_is_secure()
+        assert cookie_script("issued-token").endswith('Secure";</script>') or "Secure" in cookie_script("issued-token")
 
 
 def test_login_signup_and_setup_keep_the_password_out_of_session():
@@ -158,14 +164,13 @@ def test_login_signup_and_setup_keep_the_password_out_of_session():
         assert SECRET not in _session_text(signup)
 
     with _mocked_auth("Account setup") as (setup, _calls):
-        _labeled(setup.text_input, "Name").set_value("Grace Hopper")
         _labeled(setup.text_input, "Email").set_value("ada@example.com")
         _labeled(setup.text_input, "Password").set_value(SECRET)
         _labeled(setup.button, "Set password").click().run()
-        assert any("does not match" in item.value for item in setup.error)
+        assert any("claim code" in item.value.casefold() for item in setup.error)
         assert setup.session_state["auth_token"] is None
 
-        _labeled(setup.text_input, "Name").set_value("Ada Lovelace")
+        _labeled(setup.text_input, "Claim code").set_value("claim-code")
         _labeled(setup.text_input, "Password").set_value(SECRET)
         _labeled(setup.button, "Set password").click().run()
         assert setup.session_state["candidate_id"] == 9

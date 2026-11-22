@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from settings import get_cors_origins
 from routes.auth import router as auth_router
 from routes.candidates import router as candidates_router
 from routes.jobs import router as jobs_router
@@ -37,10 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8501",
-        "http://127.0.0.1:8501",
-    ],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -60,7 +58,7 @@ async def hide_rejected_values(_request: Request, exc: RequestValidationError) -
     for item in exc.errors():
         location = [str(part) for part in item.get("loc", []) if part not in ("body", "query", "header")]
         field = location[-1] if location else "field"
-        if "password" in field or "token" in field:
+        if any(word in field for word in ("password", "token", "claim")):
             parts.append("Check the password and try again.")
             continue
         parts.append(f"{field}: {item.get('msg', 'Invalid value')}")

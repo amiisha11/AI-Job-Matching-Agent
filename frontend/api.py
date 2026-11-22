@@ -1,8 +1,10 @@
 """Calls the FastAPI backend. This module does not open the database."""
 
+import os
+
 import requests
 
-API_URL = "http://127.0.0.1:8001"
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8001").strip().rstrip("/") or "http://127.0.0.1:8001"
 
 
 def split_csv(value: str) -> list[str]:

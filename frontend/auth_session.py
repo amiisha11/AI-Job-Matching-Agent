@@ -100,6 +100,9 @@ def clear_local_session() -> None:
     st.session_state._cookie_set = False
     st.session_state._clear_cookie = True
     st.session_state._reset_profile_form = True
+    for key in ("setup_claim", "setup_password", "login_password", "signup_password", "signup_confirm"):
+        if key in st.session_state:
+            st.session_state[key] = ""
 
 
 def _clear_resume_state() -> None:

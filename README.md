@@ -1,139 +1,176 @@
 # AI Job Matching Agent
 
-A beginner-friendly job matcher. Streamlit will collect a candidate profile, FastAPI will store profiles and jobs in PostgreSQL (Supabase), Python will rank jobs by skills and preferences, and Gemini will explain the top matches.
+A local job-matching application for candidates. It stores a structured profile, ranks jobs that have verified skill requirements, and uses Gemini only to embed skills and explain scores that the application has already calculated.
 
-**Phase 1 is the project skeleton only.** The Python files describe their future jobs. They do not start a server, connect to a database, or call an API yet.
+The live job provider is Adzuna for India and the United Kingdom. Listings without structured skill requirements stay visible, but they are not given a match score.
 
-## Prerequisites
+## Key features
+
+- Account registration, login, and logout, with passwords stored as PBKDF2 hashes and sessions stored as token hashes.
+- Account setup for an older passwordless profile. This requires a one-time administrator-issued claim code. Email and name alone cannot claim a profile.
+- Smart Profile Builder on My Profile, with education, skills, career preferences, and location preferences.
+- Discover Jobs, with search and filters over the stored catalogue.
+- Match Insights for jobs that have verified skill requirements.
+- Saved jobs for the signed-in candidate.
+- Resume Centre for a session-scoped PDF review. The PDF is not stored permanently.
+- A job preparation journal for the signed-in candidate.
+
+## Technology stack
 
 - Python 3.12
-- PowerShell (already installed on Windows)
+- FastAPI and Uvicorn for the API
+- Streamlit for the browser application
+- PostgreSQL on Supabase, accessed with SQLAlchemy and psycopg
+- Google Gemini for skill embeddings and match explanations
 
-This PC’s `python` command is Python 3.15. Uvicorn’s PyYAML dependency has no Windows installer for 3.15 yet, so the virtual environment uses Python 3.12.14, which is already installed. You do not need a Supabase project or a Gemini API key to finish Phase 1. Those are used in later phases.
+## Architecture
 
-## Folder structure
+The Streamlit application calls the FastAPI process. FastAPI is the only process that opens the database. The browser sends the session token to the API. Candidates can read and update only their own profile, matches, saved jobs, and preparation journal.
 
 ```text
-AI-Job-Matching-Agent/
-├── backend/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── database.py
-│   ├── models.py
-│   ├── settings.py
-│   ├── seed.py
-│   ├── requirements.txt
-│   ├── routes/
-│   │   ├── __init__.py
-│   │   ├── candidates.py
-│   │   └── jobs.py
-│   └── services/
-│       ├── __init__.py
-│       ├── matching.py
-│       └── ai_service.py
-├── frontend/
-│   └── app.py
-├── data/
-│   └── sample_jobs.csv
-├── .env.example
-├── .gitignore
-└── README.md
+Streamlit  -->  FastAPI  -->  Supabase PostgreSQL
+                    |
+                    +--> Gemini embeddings and explanations
+                    +--> Adzuna catalogue import commands
 ```
 
-`.env` is created on your machine from `.env.example`. Git ignores it. `.venv` is the virtual environment and is also ignored.
+## Matching
 
-## What each file is for
+Each rankable job is scored out of 100:
 
-| File | Purpose |
-| --- | --- |
-| `backend/__init__.py` | Marks `backend` as a Python package so later code can import it. |
-| `backend/main.py` | Will create the FastAPI app, load settings, allow the Streamlit page to call the API, and attach the routes. |
-| `backend/database.py` | Will open PostgreSQL using `DATABASE_URL` and hand each request a database session. |
-| `backend/models.py` | Will define the candidate, job, and saved-job tables, plus the JSON shapes the API accepts and returns. |
-| `backend/settings.py` | Will read `DATABASE_URL` and `GEMINI_API_KEY` from `.env`. This is the only place configuration is loaded. |
-| `backend/seed.py` | Will load `data/sample_jobs.csv` into the jobs table once. |
-| `backend/requirements.txt` | Pins the Python packages this project needs. |
-| `backend/routes/__init__.py` | Marks `routes` as a Python package. |
-| `backend/routes/candidates.py` | Will save a profile by email, return it, list saved jobs, save or unsave a job, and return matches. |
-| `backend/routes/jobs.py` | Will list jobs and add a job. |
-| `backend/services/__init__.py` | Marks `services` as a Python package. |
-| `backend/services/matching.py` | Will score jobs from skill overlap and preferences. No HTTP and no Gemini calls. |
-| `backend/services/ai_service.py` | Will be the only file that calls Gemini, to explain why a job matches. |
-| `frontend/app.py` | Will be the whole Streamlit screen. It will talk only to FastAPI. |
-| `data/sample_jobs.csv` | Column headers for the sample job catalog. Rows are added in a later phase. |
-| `.env.example` | Placeholder variable names. Safe to commit. Copy it to `.env`. |
-| `.env` | Your local secrets. Git ignores this file. Do not put real keys in any other file. |
-| `.gitignore` | Tells Git to skip `.env`, virtual environments, Python cache files, and secret files. |
-| `README.md` | This setup guide. |
+- 70 points for skills. Exact matches count. A related skill counts only when its cosine similarity is at least 0.75.
+- 20 points when a preferred role appears in the job title.
+- 10 points when a preferred location appears in the job location.
 
-## Setup
+Gemini does not choose the score. It embeds skill text and writes an explanation of the score the formula already produced. Jobs marked unmatchable, or jobs whose provider did not supply skill requirements, are left out of ranked results. Adding a category does not make a job matchable.
 
-Run these commands from the project folder: `C:\Users\ASUS\Desktop\AI-Job-Matching-Agent`.
+Industry preferences can be chosen in Discover filters. They do not add match points. Remote preference is stored separately and does not add match points.
 
-### 1. Check Python 3.12
+## AI integration
+
+Gemini has two jobs:
+
+- Embed candidate skills and job skill requirements for the semantic portion of the 70-point skill score.
+- Explain a ranked match from the score breakdown.
+
+The full resume text is not sent to Gemini. Resume Centre keeps the extracted text in the Streamlit session for that visit.
+
+## Adzuna
+
+The import commands search Adzuna for India (`in`) and the United Kingdom (`gb`). The stored catalogue includes manually seeded sample jobs, an earlier keyword import, and one category import of the newest listings in each official category. Adzuna listings keep the provider title, company, location, country, description snippet, category, external id, listing URL, and posting date when the provider supplied them.
+
+Salary amounts are stored only when the provider supplies a currency. Predicted salaries are ignored. The current category import had salaries without a currency, so those amounts were not stored. Employment type and workplace are not stored columns.
+
+Use of Adzuna is subject to Adzuna's developer terms and attribution requirements. This application does not grant rights to redistribute the listings beyond that agreement.
+
+## Database
+
+The main tables are:
+
+- `candidates`, including profile text, skill and preference lists, experience, and a password hash.
+- `jobs`, including source, external id, country, URL, posting time, matchability, and, after the category migration, provider category label and tag.
+- `saved_jobs`, linking one candidate to one job.
+- `auth_sessions`, storing session-token hashes and expiry.
+- `claim_tokens` and `claim_guards`, created on the next API startup for one-time claim codes and claim lockouts.
+- `preparation_plans` and `preparation_tasks`.
+- `job_sync_logs` and `provider_categories` for import history and the category catalogue.
+
+## Local setup
+
+From the project directory, create a virtual environment with Python 3.12 and install the pinned packages:
 
 ```powershell
-py -V:Astral\CPython3.12.14 --version
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+copy .env.example .env
 ```
 
-You should see `Python 3.12.14`. This selects the 3.12 interpreter instead of the default 3.15 `python` command.
+Edit `.env` on your machine. Do not commit it. The variable names are:
 
-### 2. Create a virtual environment
+- `DATABASE_URL`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+- `GEMINI_EMBEDDING_MODEL`
+- `GEMINI_SKILL_SIMILARITY_THRESHOLD`
+- `ADZUNA_APP_ID`
+- `ADZUNA_APP_KEY`
+- `CORS_ORIGINS`
+
+The frontend reads `API_URL` and `COOKIE_SECURE` from its own environment. Locally they can stay unset. The API then stays at `http://127.0.0.1:8001`, and the session cookie is not marked `Secure`, so it works on local HTTP.
+
+### Backend
 
 ```powershell
-py -V:Astral\CPython3.12.14 -m venv .venv
+cd backend
+..\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8001
 ```
 
-This creates a `.venv` folder with its own Python and `pip`. Project packages stay inside that folder instead of mixing with other projects. `.gitignore` already excludes `.venv`.
+`GET /` returns `{"status": "ok"}` when the process is up.
 
-### 3. Activate the virtual environment
-
-PowerShell:
+### Frontend
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\python.exe -m streamlit run frontend/app.py --server.port 8501
 ```
 
-The prompt should start with `(.venv)`. If PowerShell blocks the script, allow it for this window only, then activate again:
+Open `http://127.0.0.1:8501`.
+
+## Migrations
+
+Run these yourself, in order, only when that part of the database is missing. They add columns or tables. They do not delete rows.
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\python.exe backend\migrate_job_source.py
+.\.venv\Scripts\python.exe backend\migrate_job_categories.py
+.\.venv\Scripts\python.exe backend\migrate_candidate_profile.py
 ```
 
-Command Prompt uses a different activator:
+The source and category migrations have already been applied to the current Supabase database. The candidate-profile migration has not. Apply it before restarting the API. The current model reads those profile columns, and a restart before the migration will make profile requests fail.
 
-```cmd
-.venv\Scripts\activate.bat
-```
+Authentication, claim-code, and preparation tables are created when the API process starts. That startup step does not rewrite candidate or job rows.
 
-Activation lasts for that terminal window. Open a new terminal later and run the activate command again before `pip` or `python`.
-
-### 4. Install the dependencies
+To issue a claim code for a passwordless profile:
 
 ```powershell
-python -m pip install --upgrade pip
-python -m pip install -r backend/requirements.txt
+.\.venv\Scripts\python.exe backend\issue_claim_token.py --email name@example.com
 ```
 
-The first command updates the installer inside `.venv`. The second command reads `backend/requirements.txt` and installs FastAPI, Uvicorn, SQLAlchemy, the PostgreSQL driver, python-dotenv, the Gemini client, Streamlit, and requests.
+The command prints the code once. The database stores only its hash. The code expires after one hour and cannot be used twice. Five failed attempts lock further claim attempts for 15 minutes. Password login is not locked by those failures.
 
-### 5. Create your local environment file
+## Tests
 
 ```powershell
-Copy-Item .env.example .env
+.\.venv\Scripts\python.exe -m pytest frontend backend/tests -q --tb=line --ignore=backend/tests/test_live_embeddings.py
 ```
 
-This copies the placeholders into `.env`. Leave the placeholders as they are for Phase 1. You will replace them when the database and Gemini phases begin. Do not commit `.env`.
+`backend/tests/test_live_embeddings.py` calls Gemini. Run it only when you intend to use the live key.
 
-### 6. Verify the environment
+## Deployment
 
-```powershell
-python -c "import fastapi, uvicorn, sqlalchemy, psycopg, dotenv, streamlit, requests, google.genai; print('environment ok')"
-```
+The prepared targets are:
 
-`environment ok` means the packages import. Phase 1 is working. Nothing is supposed to start a server yet.
+- API: a Render web service using `render.yaml`. It installs `requirements.txt`, binds to `0.0.0.0`, and listens on the platform `PORT`. Render checks `GET /`.
+- Frontend: Streamlit Community Cloud, with the entry file `frontend/app.py`, `runtime.txt`, and the same `requirements.txt`.
+- Database: the existing Supabase PostgreSQL database, through `DATABASE_URL`.
 
-## What Phase 1 does not include
+Set the Render environment variables in the Render dashboard. `render.yaml` lists the names and does not contain values. Set `CORS_ORIGINS` to the Streamlit site origin, for example the `https://` address Streamlit Community Cloud assigns. You can list more than one origin, separated by commas.
 
-No API routes, database tables, ranking, Gemini calls, or Streamlit screens. Confirm Phase 1 before starting Phase 2 (database connection, tables, and sample jobs).
+In Streamlit secrets, set:
+
+- `API_URL` to the Render service origin, without a trailing path.
+- `COOKIE_SECURE` to `true`.
+
+Do not put those values in Git.
+
+Nothing in this repository deploys itself. Pushing code does not start Render or Streamlit until those services are connected.
+
+## Known limitations
+
+- Adzuna listings without structured skill requirements remain unmatchable. They can appear in Discover with no match score.
+- The category labels from the latest import are stored in PostgreSQL. The API job model does not yet map those columns, so Discover still shows them as not categorised until that mapping is added and the API is restarted.
+- Only Adzuna for India and the United Kingdom is integrated. Other providers and other Adzuna countries are not searched automatically.
+- Imports run from commands. There is no scheduled synchronisation.
+- Salary, currency, employment type, and workplace are shown only when those values are actually stored. Missing values are not invented.
+- There is no email-delivery service. Passwordless profiles cannot be claimed until an administrator issues a claim code.
+- Resume files and extracted resume text are not kept after the session ends.
+- The candidate-profile migration still has to be applied before the API is restarted.

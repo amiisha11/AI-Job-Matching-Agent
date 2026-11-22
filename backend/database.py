@@ -35,10 +35,13 @@ def ensure_auth_schema() -> None:
     """Add the password column and session table without changing existing rows."""
     from sqlalchemy import text
 
-    from models import AuthSession, Base
+    from models import AuthSession, Base, ClaimGuard, ClaimToken
 
     try:
-        Base.metadata.create_all(bind=engine, tables=[AuthSession.__table__])
+        Base.metadata.create_all(
+            bind=engine,
+            tables=[AuthSession.__table__, ClaimToken.__table__, ClaimGuard.__table__],
+        )
         with engine.begin() as connection:
             connection.execute(
                 text("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS password_hash TEXT")

@@ -239,6 +239,38 @@ class JobSyncLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
 
 
+class ClaimToken(Base):
+    """One administrator-issued claim code. Only the hash is stored."""
+
+    __tablename__ = "claim_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("candidates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class ClaimGuard(Base):
+    """Failed claim attempts for one email. This does not block password login."""
+
+    __tablename__ = "claim_guards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AuthSession(Base):
     """A login session. Only the hash of the token is stored."""
 

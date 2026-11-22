@@ -8,12 +8,14 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.auth_service import (
+    CLAIM_ATTEMPT_LIMIT,
     HASH_ITERATIONS,
     EmailAlreadyUsed,
     authenticate,
     end_session,
     hash_password,
     hash_token,
+    issue_claim_token,
     login_account,
     owner_conflict,
     public_candidate,
@@ -32,6 +34,8 @@ class MemoryRepo:
     def __init__(self):
         self.people = []
         self.sessions = []
+        self.claims = []
+        self.guards = {}
         self.next_id = 1
 
     def find_by_email(self, email):
@@ -75,6 +79,37 @@ class MemoryRepo:
 
     def candidate_by_id(self, candidate_id):
         return next((person for person in self.people if person.id == candidate_id), None)
+
+    def save_claim_token(self, candidate_id, token_hash, expires_at, created_at):
+        self.claims.append(
+            SimpleNamespace(
+                candidate_id=candidate_id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+                used_at=None,
+                created_at=created_at,
+            )
+        )
+
+    def retire_unused_claims(self, candidate_id, used_at):
+        for claim in self.claims:
+            if claim.candidate_id == candidate_id and claim.used_at is None:
+                claim.used_at = used_at
+
+    def unused_claims(self, candidate_id):
+        return [claim for claim in self.claims if claim.candidate_id == candidate_id and claim.used_at is None]
+
+    def mark_claim_used(self, claim, used_at):
+        claim.used_at = used_at
+
+    def get_claim_guard(self, email):
+        return self.guards.get(email)
+
+    def save_claim_guard(self, email, failed_attempts, locked_until):
+        self.guards[email] = SimpleNamespace(failed_attempts=failed_attempts, locked_until=locked_until)
+
+    def clear_claim_guard(self, email):
+        self.guards.pop(email, None)
 
 
 def test_password_hash_is_salted_and_checkable():
@@ -146,30 +181,47 @@ def test_existing_profile_needs_the_stored_name_before_a_password_is_set():
     repo.people.append(existing)
     blocked = register_account(repo, "Ada Lovelace", "ada@example.com", "correct-horse", NOW, FAST)
     assert blocked.status == 409
-    assert blocked.message == "This email already has a profile. Set a password on Account setup."
+    assert blocked.message == "This email already has a profile. Ask an administrator for a claim code."
 
     needs_setup = login_account(repo, "ada@example.com", "correct-horse", NOW)
     assert needs_setup.status == 409
-    assert needs_setup.message == "This profile has no password yet. Use Account setup."
+    assert needs_setup.message == "This profile has no password yet. Account setup requires a claim code."
     assert existing.password_hash is None
 
-    mismatch = setup_password(repo, "Grace Hopper", "ada@example.com", "correct-horse", NOW, FAST)
-    assert mismatch.status == 401
-    assert mismatch.message == "The name does not match the profile for that email."
+    by_name = setup_password(repo, "ada@example.com", "correct-horse", "", NOW, FAST)
+    assert by_name.status == 422
+    assert by_name.message == "A claim code is required."
     assert existing.password_hash is None
+    assert repo.sessions == []
 
-    ready = setup_password(repo, "ada lovelace", "Ada@Example.com", "correct-horse", NOW, FAST)
+    issued = issue_claim_token(repo, "Ada@Example.com", NOW)
+    assert issued.ok
+    assert issued.token
+    assert issued.token not in {claim.token_hash for claim in repo.claims}
+    assert repo.claims[0].token_hash == hash_token(issued.token)
+
+    ready = setup_password(repo, "Ada@Example.com", "correct-horse", issued.token, NOW, FAST)
     assert ready.ok
     assert ready.candidate["skills"] == ["Python", "SQL"]
     assert ready.candidate["years_experience"] == 3
     assert "password_hash" not in ready.candidate
     assert verify_password("correct-horse", existing.password_hash)
+    assert repo.claims[0].used_at == NOW
 
-    again = setup_password(repo, "Ada Lovelace", "ada@example.com", "another-horse", NOW, FAST)
-    assert again.message == "This account already has a password. Log in."
+    reused = setup_password(repo, "ada@example.com", "another-horse", issued.token, NOW, FAST)
+    assert reused.status == 401
+    assert reused.message == "The claim code is not valid."
+    assert verify_password("correct-horse", existing.password_hash)
+    assert not verify_password("another-horse", existing.password_hash)
+
     signed_in = login_account(repo, "ada@example.com", "correct-horse", NOW)
     assert signed_in.ok
     assert signed_in.candidate["id"] == 8
+    kept_sessions = list(repo.sessions)
+    again = setup_password(repo, "ada@example.com", "another-horse", issued.token, NOW, FAST)
+    assert again.message == "The claim code is not valid."
+    assert repo.sessions == kept_sessions
+    assert authenticate(repo, signed_in.token, NOW).ok
 
 
 def test_unknown_email_does_not_reveal_a_profile():
@@ -177,9 +229,10 @@ def test_unknown_email_does_not_reveal_a_profile():
     missing = login_account(repo, "missing@example.com", "correct-horse", NOW)
     assert missing.status == 401
     assert missing.message == "Incorrect email or password."
-    waiting = setup_password(repo, "Ada Lovelace", "missing@example.com", "correct-horse", NOW, FAST)
-    assert waiting.status == 404
-    assert waiting.message == "No profile is waiting for a password with that email."
+    waiting = setup_password(repo, "missing@example.com", "correct-horse", "not-a-real-code", NOW, FAST)
+    assert waiting.status == 401
+    assert waiting.message == "The claim code is not valid."
+    assert repo.people == []
 
 
 def test_expired_and_logged_out_sessions_are_rejected():
@@ -200,6 +253,73 @@ def test_expired_and_logged_out_sessions_are_rejected():
     assert signed_out.message == "Log in to continue."
     assert owner_conflict(fresh.candidate["id"], 99) == "You cannot open another candidate's profile."
     assert owner_conflict(fresh.candidate["id"], fresh.candidate["id"]) is None
+
+
+def test_a_valid_claim_does_not_replace_an_existing_password_or_session():
+    repo = MemoryRepo()
+    existing = SimpleNamespace(
+        id=8,
+        name="Ada Lovelace",
+        email="ada@example.com",
+        education=None,
+        skills=["Python"],
+        preferred_roles=[],
+        preferred_locations=[],
+        years_experience=1,
+        password_hash=hash_password("correct-horse", FAST),
+    )
+    repo.people.append(existing)
+    raw = "already-issued-code"
+    repo.save_claim_token(existing.id, hash_token(raw), NOW + timedelta(hours=1), NOW)
+    session = repo.start_session(existing.id, NOW, timedelta(hours=12))
+
+    result = setup_password(repo, "ada@example.com", "another-horse", raw, NOW, FAST)
+
+    assert result.status == 409
+    assert result.message == "This account already has a password. Log in."
+    assert verify_password("correct-horse", existing.password_hash)
+    assert not verify_password("another-horse", existing.password_hash)
+    assert repo.claims[0].used_at == NOW
+    assert authenticate(repo, session, NOW).ok
+
+
+def test_claim_codes_expire_lock_and_do_not_replace_a_password():
+    repo = MemoryRepo()
+    existing = SimpleNamespace(
+        id=8,
+        name="Ada Lovelace",
+        email="ada@example.com",
+        education=None,
+        skills=["Python"],
+        preferred_roles=[],
+        preferred_locations=[],
+        years_experience=1,
+        password_hash=None,
+    )
+    repo.people.append(existing)
+    issued = issue_claim_token(repo, "ada@example.com", NOW)
+    expired = setup_password(repo, "ada@example.com", "correct-horse", issued.token, NOW + timedelta(hours=2), FAST)
+    assert expired.status == 401
+    assert existing.password_hash is None
+    assert repo.claims[0].used_at is None
+
+    for _ in range(CLAIM_ATTEMPT_LIMIT - 1):
+        failed = setup_password(repo, "ada@example.com", "correct-horse", "wrong-code", NOW, FAST)
+        assert failed.status == 401
+    locked = setup_password(repo, "ada@example.com", "correct-horse", issued.token, NOW, FAST)
+    assert locked.status == 429
+    assert existing.password_hash is None
+
+    ready = setup_password(repo, "ada@example.com", "correct-horse", issued.token, NOW + timedelta(minutes=16), FAST)
+    assert ready.ok
+    first_session = ready.token
+    assert authenticate(repo, first_session, NOW + timedelta(minutes=16)).ok
+
+    replacement = issue_claim_token(repo, "ada@example.com", NOW)
+    assert replacement.status == 409
+    assert replacement.token is None
+    assert verify_password("correct-horse", existing.password_hash)
+    assert authenticate(repo, first_session, NOW + timedelta(minutes=16)).ok
 
 
 def test_a_lost_insert_race_does_not_return_a_token():

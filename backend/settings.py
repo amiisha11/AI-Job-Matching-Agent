@@ -68,6 +68,14 @@ def _configured_secret(name: str, placeholder: str) -> str:
     return value
 
 
+def get_cors_origins() -> list[str]:
+    """Return the browser origins allowed to call the API."""
+    raw_value = os.getenv("CORS_ORIGINS", "").strip()
+    if not raw_value:
+        return ["http://localhost:8501", "http://127.0.0.1:8501"]
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
 def get_skill_similarity_threshold() -> float:
     """Return the minimum cosine similarity that counts as a related skill."""
     raw_value = os.getenv("GEMINI_SKILL_SIMILARITY_THRESHOLD", "").strip()
