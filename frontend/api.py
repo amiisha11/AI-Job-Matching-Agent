@@ -1,10 +1,8 @@
 """Calls the FastAPI backend. This module does not open the database."""
 
-import os
-
 import requests
 
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8001").strip().rstrip("/") or "http://127.0.0.1:8001"
+from app_config import api_base_url
 
 
 def split_csv(value: str) -> list[str]:
@@ -43,16 +41,17 @@ def api_request(
 ):
     """Call one API path. Returns the JSON body, or None and an error sentence."""
     headers = {"Authorization": f"Bearer {token}"} if token else None
+    base_url = api_base_url()
     try:
         response = requests.request(
             method,
-            f"{API_URL}{path}",
+            f"{base_url}{path}",
             json=payload,
             headers=headers,
             timeout=timeout,
         )
     except requests.RequestException:
-        return None, f"Cannot reach the API at {API_URL}. Start FastAPI on port 8001 and try again."
+        return None, f"Cannot reach the API at {base_url}. Start FastAPI on port 8001 and try again."
     if response.status_code >= 400:
         return None, error_text(response)
     if not response.content:
@@ -63,16 +62,17 @@ def api_request(
 def api_upload(path: str, filename: str, content: bytes, token: str | None = None, timeout: int = 60):
     """Post one PDF. The body is file bytes, not JSON, and it is not printed."""
     headers = {"Authorization": f"Bearer {token}"} if token else None
+    base_url = api_base_url()
     try:
         response = requests.request(
             "POST",
-            f"{API_URL}{path}",
+            f"{base_url}{path}",
             files={"file": (filename, content, "application/pdf")},
             headers=headers,
             timeout=timeout,
         )
     except requests.RequestException:
-        return None, f"Cannot reach the API at {API_URL}. Start FastAPI on port 8001 and try again."
+        return None, f"Cannot reach the API at {base_url}. Start FastAPI on port 8001 and try again."
     if response.status_code >= 400:
         return None, error_text(response)
     if not response.content:

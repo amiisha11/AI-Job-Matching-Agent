@@ -104,7 +104,13 @@ def test_cookie_script_sets_and_clears_without_a_password():
     assert "SameSite=Lax" in created
     assert "Max-Age=0" in cookie_script("")
     assert SECRET not in created
-    assert "Secure" not in created
+    with (
+        patch.dict("os.environ", {"COOKIE_SECURE": ""}, clear=False),
+        patch("app_config.streamlit_secret", return_value=None),
+    ):
+        local_cookie = cookie_script("issued-token")
+    assert "Secure" not in local_cookie
+    assert "SameSite=Lax" in local_cookie
     with patch.dict("os.environ", {"COOKIE_SECURE": "true"}):
         assert cookie_is_secure()
         assert cookie_script("issued-token").endswith('Secure";</script>') or "Secure" in cookie_script("issued-token")

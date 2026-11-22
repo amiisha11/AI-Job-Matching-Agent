@@ -96,7 +96,7 @@ Edit `.env` on your machine. Do not commit it. The variable names are:
 - `ADZUNA_APP_KEY`
 - `CORS_ORIGINS`
 
-The frontend reads `API_URL` and `COOKIE_SECURE` from its own environment. Locally they can stay unset. The API then stays at `http://127.0.0.1:8001`, and the session cookie is not marked `Secure`, so it works on local HTTP.
+The frontend reads `API_URL` and `COOKIE_SECURE` from its environment first, then from Streamlit secrets. Locally both can stay unset. The API then stays at `http://127.0.0.1:8001`, and the session cookie is not marked `Secure`, so it works on local HTTP.
 
 ### Backend
 
@@ -155,12 +155,16 @@ The prepared targets are:
 
 Set the Render environment variables in the Render dashboard. `render.yaml` lists the names and does not contain values. Set `CORS_ORIGINS` to the Streamlit site origin, for example the `https://` address Streamlit Community Cloud assigns. You can list more than one origin, separated by commas.
 
-In Streamlit secrets, set:
+In Streamlit Community Cloud secrets, use this form. Do not commit the file.
 
-- `API_URL` to the Render service origin, without a trailing path.
-- `COOKIE_SECURE` to `true`.
+```toml
+API_URL = "https://ai-job-matching-api.onrender.com"
+COOKIE_SECURE = true
+```
 
-Do not put those values in Git.
+`COOKIE_SECURE` may be the boolean `true` or a string such as `"true"`. An environment variable with the same name overrides the secret. Leave both unset for local HTTP.
+
+Do not put secret values in Git.
 
 Nothing in this repository deploys itself. Pushing code does not start Render or Streamlit until those services are connected.
 

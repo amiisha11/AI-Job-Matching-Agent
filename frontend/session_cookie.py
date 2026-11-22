@@ -5,7 +5,8 @@ so the cookie is SameSite=Lax and is never placed in the address bar.
 """
 
 import json
-import os
+
+from app_config import cookie_secure_enabled
 
 COOKIE_NAME = "aj_session"
 MAX_AGE_SECONDS = 12 * 60 * 60
@@ -13,7 +14,7 @@ MAX_AGE_SECONDS = 12 * 60 * 60
 
 def cookie_is_secure() -> bool:
     """True when COOKIE_SECURE asks the browser to send the cookie only over HTTPS."""
-    return os.getenv("COOKIE_SECURE", "").strip().lower() in {"1", "true", "yes"}
+    return cookie_secure_enabled()
 
 
 def cookie_assignment(token: str) -> str:
