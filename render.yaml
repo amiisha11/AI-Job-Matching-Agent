@@ -25,3 +25,23 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      - key: APP_ENV
+        value: production
+      - key: EMAIL_OTP_DEV_MODE
+        value: "false"
+      - key: EMAIL_OTP_PEPPER
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_USE_TLS
+        sync: false
+      - key: SMTP_USE_SSL
+        sync: false

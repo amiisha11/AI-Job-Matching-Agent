@@ -58,7 +58,7 @@ async def hide_rejected_values(_request: Request, exc: RequestValidationError) -
     for item in exc.errors():
         location = [str(part) for part in item.get("loc", []) if part not in ("body", "query", "header")]
         field = location[-1] if location else "field"
-        if any(word in field for word in ("password", "token", "claim")):
+        if any(word in field for word in ("password", "token", "claim", "otp")):
             parts.append("Check the password and try again.")
             continue
         parts.append(f"{field}: {item.get('msg', 'Invalid value')}")

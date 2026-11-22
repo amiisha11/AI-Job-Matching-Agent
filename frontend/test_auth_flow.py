@@ -63,11 +63,13 @@ def _mocked_auth(page="Login", **state):
                     409,
                 )
             return FakeResponse({"token": "issued-token", "candidate": CANDIDATE}, 201)
+        if method == "POST" and url.endswith("/auth/setup/send-otp"):
+            return FakeResponse(
+                {"detail": "If an eligible profile exists, a verification code has been sent to the registered email address."}
+            )
         if method == "POST" and url.endswith("/auth/setup-password"):
-            if not kwargs["json"].get("claim_code"):
-                return FakeResponse({"detail": "A claim code is required."}, 422)
-            if kwargs["json"]["claim_code"] != "claim-code":
-                return FakeResponse({"detail": "The claim code is not valid."}, 401)
+            if kwargs["json"].get("otp") != "123456":
+                return FakeResponse({"detail": "The verification code is not valid."}, 401)
             return FakeResponse({"token": "issued-token", "candidate": CANDIDATE})
         if method == "POST" and url.endswith("/auth/logout"):
             return FakeResponse({}, 204)
@@ -169,18 +171,34 @@ def test_login_signup_and_setup_keep_the_password_out_of_session():
         assert signup.session_state["nav"] == "My Profile"
         assert SECRET not in _session_text(signup)
 
-    with _mocked_auth("Account setup") as (setup, _calls):
+    with _mocked_auth("Account setup") as (setup, calls):
+        _labeled(setup.button, "Send OTP").click().run()
+        assert any("email" in item.value.casefold() for item in setup.error)
+        assert not any(url.endswith("/auth/setup/send-otp") for _, url, _, _ in calls)
+
         _labeled(setup.text_input, "Email").set_value("ada@example.com")
-        _labeled(setup.text_input, "Password").set_value(SECRET)
+        _labeled(setup.button, "Send OTP").click().run()
+        assert any("Verification code sent" in item.value for item in setup.success)
+        _labeled(setup.text_input, "Verification code").set_value("123456")
+        _labeled(setup.text_input, "New password").set_value(SECRET)
+        _labeled(setup.text_input, "Confirm new password").set_value("different")
         _labeled(setup.button, "Set password").click().run()
-        assert any("claim code" in item.value.casefold() for item in setup.error)
+        assert any("do not match" in item.value for item in setup.error)
         assert setup.session_state["auth_token"] is None
 
-        _labeled(setup.text_input, "Claim code").set_value("claim-code")
-        _labeled(setup.text_input, "Password").set_value(SECRET)
+        _labeled(setup.text_input, "Verification code").set_value("000000")
+        _labeled(setup.text_input, "New password").set_value(SECRET)
+        _labeled(setup.text_input, "Confirm new password").set_value(SECRET)
+        _labeled(setup.button, "Set password").click().run()
+        assert any("not valid" in item.value for item in setup.error)
+
+        _labeled(setup.text_input, "Verification code").set_value("123456")
+        _labeled(setup.text_input, "New password").set_value(SECRET)
+        _labeled(setup.text_input, "Confirm new password").set_value(SECRET)
         _labeled(setup.button, "Set password").click().run()
         assert setup.session_state["candidate_id"] == 9
         assert setup.session_state["profile"]["email"] == "ada@example.com"
+        assert setup.session_state["setup_otp"] == ""
         assert SECRET not in _session_text(setup)
 
 
@@ -191,9 +209,15 @@ def test_logout_and_expired_session_return_to_login():
         candidate_id=9,
         candidate_name="Ada Lovelace",
         profile=CANDIDATE,
+        setup_otp="123456",
+        setup_dev_otp="123456",
+        setup_password=SECRET,
     ) as (home, calls):
         _labeled(home.button, "Log out").click().run()
         assert home.session_state["auth_token"] is None
+        assert home.session_state["setup_otp"] == ""
+        assert home.session_state["setup_dev_otp"] == ""
+        assert home.session_state["setup_password"] == ""
         assert home.session_state["candidate_id"] is None
         assert home.session_state["nav"] == "Login"
         assert any(url.endswith("/auth/logout") for _, url, _, _ in calls)

@@ -76,6 +76,59 @@ def get_cors_origins() -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
+def get_app_env() -> str:
+    """Return the deployment environment. An empty value means production."""
+    value = os.getenv("APP_ENV", "").strip().lower()
+    return value or "production"
+
+
+def dev_otp_fallback_allowed() -> bool:
+    """Return whether a local screen may show a setup code instead of emailing it.
+
+    Production never allows this, even when EMAIL_OTP_DEV_MODE is set.
+    """
+    if get_app_env() != "development":
+        return False
+    return _flag("EMAIL_OTP_DEV_MODE", False)
+
+
+def get_email_otp_pepper() -> str:
+    """Return the HMAC pepper for setup codes. Callers must not print it."""
+    return _configured_secret("EMAIL_OTP_PEPPER", "your_email_otp_pepper_here")
+
+
+def get_smtp_settings() -> dict:
+    """Return SMTP settings. The password is included only for the mail client."""
+    port_text = os.getenv("SMTP_PORT", "").strip()
+    try:
+        port = int(port_text) if port_text else 587
+    except ValueError:
+        port = 587
+    use_ssl = _flag("SMTP_USE_SSL", False)
+    return {
+        "host": os.getenv("SMTP_HOST", "").strip(),
+        "port": port,
+        "username": os.getenv("SMTP_USERNAME", "").strip(),
+        "password": os.getenv("SMTP_PASSWORD", "").strip(),
+        "from_email": os.getenv("SMTP_FROM_EMAIL", "").strip(),
+        "use_ssl": use_ssl,
+        "use_tls": _flag("SMTP_USE_TLS", not use_ssl),
+    }
+
+
+def smtp_is_configured() -> bool:
+    """True when a host and From address are both set."""
+    settings = get_smtp_settings()
+    return bool(settings["host"] and settings["from_email"])
+
+
+def _flag(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_skill_similarity_threshold() -> float:
     """Return the minimum cosine similarity that counts as a related skill."""
     raw_value = os.getenv("GEMINI_SKILL_SIMILARITY_THRESHOLD", "").strip()

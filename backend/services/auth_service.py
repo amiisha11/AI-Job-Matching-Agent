@@ -14,9 +14,16 @@ from datetime import datetime, timedelta, timezone
 HASH_ITERATIONS = 600_000
 SESSION_HOURS = 12
 SESSION_LIFETIME = timedelta(hours=SESSION_HOURS)
-CLAIM_LIFETIME = timedelta(hours=1)
-CLAIM_ATTEMPT_LIMIT = 5
-CLAIM_LOCK = timedelta(minutes=15)
+OTP_LIFETIME = timedelta(minutes=10)
+OTP_COOLDOWN = timedelta(seconds=60)
+OTP_SEND_WINDOW = timedelta(minutes=15)
+OTP_SEND_LIMIT = 3
+OTP_IP_LIMIT = 10
+OTP_ATTEMPT_LIMIT = 5
+OTP_LOCK = timedelta(minutes=15)
+OTP_SENT = (
+    "If an eligible profile exists, a verification code has been sent to the registered email address."
+)
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DUMMY_HASH: str | None = None
 
@@ -30,6 +37,7 @@ class AuthResult:
     message: str = ""
     token: str | None = None
     candidate: dict | None = None
+    dev_otp: str | None = None
 
 
 def hash_password(password: str, iterations: int = HASH_ITERATIONS) -> str:
@@ -59,6 +67,16 @@ def verify_password(password: str, stored: str) -> bool:
 def hash_token(raw_token: str) -> str:
     """Hash a session token before it is stored."""
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def generate_otp() -> str:
+    """Return a six-digit code from the cryptographic random source."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_otp(otp: str, pepper: str) -> str:
+    """Return the HMAC-SHA256 of a setup code. The raw code is not recoverable from it."""
+    return hmac.new(pepper.encode("utf-8"), str(otp).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _dummy_hash() -> str:
@@ -146,7 +164,7 @@ def register_account(repo, name: str, email: str, password: str, now: datetime, 
     if existing is not None and existing.password_hash:
         return _fail(409, "An account with this email already exists. Log in instead.")
     if existing is not None:
-        return _fail(409, "This email already has a profile. Ask an administrator for a claim code.")
+        return _fail(409, "This email already has a profile. Use Account setup to verify the email.")
 
     try:
         candidate = repo.add_candidate(cleaned_name, cleaned_email, hash_password(password, iterations))
@@ -163,7 +181,7 @@ def login_account(repo, email: str, password: str, now: datetime) -> AuthResult:
     if candidate is None or not candidate.password_hash:
         verify_password(password, _dummy_hash())
         if candidate is not None and not candidate.password_hash:
-            return _fail(409, "This profile has no password yet. Account setup requires a claim code.")
+            return _fail(409, "This profile has no password yet. Use Account setup to verify your email.")
         return _fail(401, "Incorrect email or password.")
     if not verify_password(password, candidate.password_hash):
         return _fail(401, "Incorrect email or password.")
@@ -171,35 +189,64 @@ def login_account(repo, email: str, password: str, now: datetime) -> AuthResult:
     return _ok(200, token, candidate)
 
 
-def issue_claim_token(repo, email: str, now: datetime) -> AuthResult:
-    """Create a one-time claim code for a passwordless profile.
+def send_setup_otp(
+    repo,
+    email: str,
+    now: datetime,
+    pepper: str,
+    smtp_ready: bool,
+    dev_fallback: bool,
+    send_email,
+    client_ip: str | None = None,
+) -> AuthResult:
+    """Request a setup code for a passwordless profile.
 
-    The raw code is returned once to the administrator. Only its hash is stored.
-    An account that already has a password is left unchanged.
+    Unknown emails and accounts that already have a password get the same
+    response and do not receive a code. The raw code is returned only when the
+    explicit local development fallback is on and mail is not configured.
     """
     cleaned_email = email.strip().lower()
     problem = _email_error(cleaned_email)
     if problem:
         return _fail(422, problem)
+    if not pepper:
+        return _fail(503, "Email verification is not configured.")
+    if not smtp_ready and not dev_fallback:
+        return _fail(503, "Email delivery is not configured.")
+
+    moment = _as_utc(now)
+    limited = _otp_send_limit(repo, cleaned_email, client_ip, moment)
+    if limited is not None:
+        return limited
+    repo.record_otp_send(cleaned_email, _clean_ip(client_ip), moment)
+
     candidate = repo.find_by_email(cleaned_email)
     if candidate is None or candidate.password_hash:
-        return _fail(409, "A claim code can be issued only for a profile that has no password.")
-    moment = _as_utc(now)
-    repo.retire_unused_claims(candidate.id, moment)
-    raw_token = secrets.token_urlsafe(32)
-    repo.save_claim_token(candidate.id, hash_token(raw_token), moment + CLAIM_LIFETIME, moment)
-    return AuthResult(ok=True, status=201, message="Claim code issued.", token=raw_token)
+        return AuthResult(ok=True, status=202, message=OTP_SENT)
+
+    repo.retire_unused_otps(candidate.id, moment)
+    raw_otp = generate_otp()
+    repo.save_setup_otp(candidate.id, hash_otp(raw_otp, pepper), moment, moment + OTP_LIFETIME)
+    if dev_fallback and not smtp_ready:
+        return AuthResult(ok=True, status=202, message=OTP_SENT, dev_otp=raw_otp)
+    try:
+        send_email(cleaned_email, raw_otp)
+    except Exception:
+        repo.retire_unused_otps(candidate.id, moment)
+        return _fail(503, "Email delivery is temporarily unavailable.")
+    return AuthResult(ok=True, status=202, message=OTP_SENT)
 
 
 def setup_password(
     repo,
     email: str,
     password: str,
-    claim_code: str,
+    otp: str,
     now: datetime,
+    pepper: str,
     iterations: int = HASH_ITERATIONS,
 ) -> AuthResult:
-    """Set the first password when the claim code proves the administrator issued it.
+    """Set the first password when the emailed code matches its stored HMAC.
 
     The profile name is not accepted as proof. A wrong, expired, or reused code
     does not change the password or existing sessions.
@@ -208,60 +255,89 @@ def setup_password(
     problem = _email_error(cleaned_email) or _password_error(password)
     if problem:
         return _fail(422, problem)
-    code = str(claim_code or "").strip()
-    if not code:
-        return _fail(422, "A claim code is required.")
+    code = str(otp or "").strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return _fail(422, "Enter the six-digit verification code.")
+    if not pepper:
+        return _fail(503, "Email verification is not configured.")
 
     moment = _as_utc(now)
-    guard = repo.get_claim_guard(cleaned_email)
+    guard = repo.get_otp_guard(cleaned_email)
     locked_until = _as_utc(guard.locked_until) if guard is not None and guard.locked_until else None
     if locked_until is not None and locked_until > moment:
-        _dummy_claim_check(code)
-        return _fail(429, "Too many claim attempts. Try again later.")
+        _dummy_otp_check(pepper)
+        return _fail(429, "Too many attempts. Try again in 15 minutes.")
 
     candidate = repo.find_by_email(cleaned_email)
-    matched = _matching_claim(repo, candidate, code, moment) if candidate is not None else None
+    matched = _matching_otp(repo, candidate, code, pepper, moment) if candidate is not None else None
     if matched is None:
-        _dummy_claim_check(code)
-        _record_claim_failure(repo, cleaned_email, guard, moment)
-        return _fail(401, "The claim code is not valid.")
+        _dummy_otp_check(pepper)
+        _record_otp_failure(repo, cleaned_email, candidate, guard, moment)
+        return _fail(401, "The verification code is not valid.")
     if candidate.password_hash:
-        repo.mark_claim_used(matched, moment)
+        repo.mark_otp_used(matched, moment)
         return _fail(409, "This account already has a password. Log in.")
 
     password_hash = hash_password(password, iterations)
-    candidate.password_hash = password_hash
-    repo.set_password(candidate, password_hash)
-    repo.mark_claim_used(matched, moment)
-    repo.clear_claim_guard(cleaned_email)
+    if not repo.consume_setup_otp(matched, candidate, password_hash, moment):
+        _record_otp_failure(repo, cleaned_email, candidate, guard, moment)
+        return _fail(401, "The verification code is not valid.")
+    repo.clear_otp_guard(cleaned_email)
     token = repo.start_session(candidate.id, moment, SESSION_LIFETIME)
     return _ok(200, token, candidate)
 
 
-def _dummy_claim_check(code: str) -> None:
-    """Do the same hash comparison when the code does not match a stored claim."""
-    hmac.compare_digest(hash_token(code), hash_token("not-a-claim-code"))
+def _clean_ip(client_ip: str | None) -> str | None:
+    if not client_ip:
+        return None
+    text = str(client_ip).strip()
+    return text[:64] or None
 
 
-def _matching_claim(repo, candidate, code: str, now: datetime):
-    wanted = hash_token(code)
+def _otp_send_limit(repo, email: str, client_ip: str | None, now: datetime) -> AuthResult | None:
+    recent = repo.otp_sends_since(email, now - OTP_SEND_WINDOW)
+    if recent:
+        latest = max(_as_utc(row.created_at) for row in recent)
+        if now - latest < OTP_COOLDOWN:
+            return _fail(429, "Resend temporarily unavailable. Wait a minute and try again.")
+    if len(recent) >= OTP_SEND_LIMIT:
+        return _fail(429, "Too many verification codes were requested. Try again later.")
+    ip_address = _clean_ip(client_ip)
+    if ip_address is not None:
+        ip_rows = repo.otp_sends_for_ip_since(ip_address, now - OTP_SEND_WINDOW)
+        if len(ip_rows) >= OTP_IP_LIMIT:
+            return _fail(429, "Too many verification codes were requested. Try again later.")
+    return None
+
+
+def _dummy_otp_check(pepper: str) -> None:
+    """Do the same HMAC comparison when the code does not match a stored row."""
+    hmac.compare_digest(hash_otp("000000", pepper), hash_otp("000001", pepper))
+
+
+def _matching_otp(repo, candidate, code: str, pepper: str, now: datetime):
+    wanted = hash_otp(code, pepper)
     found = None
-    for claim in repo.unused_claims(candidate.id):
-        if hmac.compare_digest(claim.token_hash, wanted):
-            found = claim
+    for row in repo.unused_otps(candidate.id):
+        if hmac.compare_digest(row.otp_hash, wanted):
+            found = row
     if found is None or _as_utc(found.expires_at) <= now:
         return None
     return found
 
 
-def _record_claim_failure(repo, email: str, guard, now: datetime) -> None:
+def _record_otp_failure(repo, email: str, candidate, guard, now: datetime) -> None:
     attempts = 0 if guard is None else int(guard.failed_attempts or 0)
     attempts += 1
     locked_until = None
-    if attempts >= CLAIM_ATTEMPT_LIMIT:
-        locked_until = now + CLAIM_LOCK
+    if candidate is not None:
+        repo.bump_otp_failures(candidate.id)
+    if attempts >= OTP_ATTEMPT_LIMIT:
+        locked_until = now + OTP_LOCK
         attempts = 0
-    repo.save_claim_guard(email, attempts, locked_until)
+        if candidate is not None:
+            repo.retire_unused_otps(candidate.id, now)
+    repo.save_otp_guard(email, attempts, locked_until)
 
 
 def authenticate(repo, raw_token: str | None, now: datetime) -> AuthResult:

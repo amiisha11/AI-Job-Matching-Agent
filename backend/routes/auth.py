@@ -6,7 +6,8 @@ never a password hash.
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from deps import bearer_token, get_auth_repo, get_current_candidate
@@ -18,8 +19,11 @@ from services.auth_service import (
     login_account,
     public_candidate,
     register_account,
+    send_setup_otp,
     setup_password,
 )
+from services.email_delivery import deliver_setup_code
+from settings import dev_otp_fallback_allowed, get_email_otp_pepper, smtp_is_configured
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,12 +41,18 @@ class AccountBody(Credentials):
     name: str = Field(min_length=1, max_length=200)
 
 
+class SendOtpBody(BaseModel):
+    """The email that should receive a setup code."""
+
+    email: str = Field(min_length=1, max_length=320)
+
+
 class SetupBody(BaseModel):
-    """A claim code plus the password to set. The profile name is not proof."""
+    """A six-digit code plus the password to set. The profile name is not proof."""
 
     email: str = Field(min_length=1, max_length=320)
     password: str = Field(min_length=1, max_length=128)
-    claim_code: str = Field(min_length=1, max_length=200)
+    otp: str = Field(min_length=1, max_length=12)
 
 
 class CandidatePublic(BaseModel):
@@ -91,11 +101,48 @@ def login(body: Credentials, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict
     return _finish(login_account(repo, body.email, body.password, datetime.now(timezone.utc)))
 
 
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded.strip():
+        return forwarded.split(",")[0].strip()[:64] or None
+    if request.client is None:
+        return None
+    return request.client.host[:64]
+
+
+@router.post("/setup/send-otp")
+def send_otp(body: SendOtpBody, request: Request, repo: SqlAuthRepo = Depends(get_auth_repo)) -> JSONResponse:
+    """Ask for a setup code. The response does not say whether the email exists."""
+    result = send_setup_otp(
+        repo,
+        body.email,
+        datetime.now(timezone.utc),
+        pepper=get_email_otp_pepper(),
+        smtp_ready=smtp_is_configured(),
+        dev_fallback=dev_otp_fallback_allowed(),
+        send_email=deliver_setup_code,
+        client_ip=_client_ip(request),
+    )
+    if not result.ok:
+        raise HTTPException(status_code=result.status, detail=result.message)
+    payload = {"detail": result.message}
+    if result.dev_otp:
+        payload["dev_otp"] = result.dev_otp
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=payload)
+
+
 @router.post("/setup-password", response_model=AuthResponse)
 def setup(body: SetupBody, repo: SqlAuthRepo = Depends(get_auth_repo)) -> dict:
-    """Set a password when a one-time claim code matches the stored hash."""
+    """Set a password when the emailed code matches the stored HMAC."""
     return _finish(
-        setup_password(repo, body.email, body.password, body.claim_code, datetime.now(timezone.utc))
+        setup_password(
+            repo,
+            body.email,
+            body.password,
+            body.otp,
+            datetime.now(timezone.utc),
+            get_email_otp_pepper(),
+        )
     )
 
 

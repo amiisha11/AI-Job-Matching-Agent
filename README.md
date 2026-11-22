@@ -7,7 +7,7 @@ The live job provider is Adzuna for India and the United Kingdom. Listings witho
 ## Key features
 
 - Account registration, login, and logout, with passwords stored as PBKDF2 hashes and sessions stored as token hashes.
-- Account setup for an older passwordless profile. This requires a one-time administrator-issued claim code. Email and name alone cannot claim a profile.
+- Account setup for an older passwordless profile. The profile email receives a six-digit code that expires in 10 minutes. Email and name alone cannot claim a profile.
 - Smart Profile Builder on My Profile, with education, skills, career preferences, and location preferences.
 - Discover Jobs, with search and filters over the stored catalogue.
 - Match Insights for jobs that have verified skill requirements.
@@ -71,7 +71,8 @@ The main tables are:
 - `jobs`, including source, external id, country, URL, posting time, matchability, and, after the category migration, provider category label and tag.
 - `saved_jobs`, linking one candidate to one job.
 - `auth_sessions`, storing session-token hashes and expiry.
-- `claim_tokens` and `claim_guards`, created on the next API startup for one-time claim codes and claim lockouts.
+- `email_setup_otps`, `otp_sends`, and `otp_guards` for emailed setup codes and request limits.
+- `claim_tokens` and `claim_guards`, kept for older records. New account setup does not accept those codes.
 - `preparation_plans` and `preparation_tasks`.
 - `job_sync_logs` and `provider_categories` for import history and the category catalogue.
 
@@ -95,6 +96,16 @@ Edit `.env` on your machine. Do not commit it. The variable names are:
 - `ADZUNA_APP_ID`
 - `ADZUNA_APP_KEY`
 - `CORS_ORIGINS`
+- `APP_ENV`
+- `EMAIL_OTP_DEV_MODE`
+- `EMAIL_OTP_PEPPER`
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD`
+- `SMTP_FROM_EMAIL`
+- `SMTP_USE_TLS`
+- `SMTP_USE_SSL`
 
 The frontend reads `API_URL` and `COOKIE_SECURE` from its environment first, then from Streamlit secrets. Locally both can stay unset. The API then stays at `http://127.0.0.1:8001`, and the session cookie is not marked `Secure`, so it works on local HTTP.
 
@@ -125,17 +136,17 @@ Run these yourself, in order, only when that part of the database is missing. Th
 .\.venv\Scripts\python.exe backend\migrate_candidate_profile.py
 ```
 
-The source and category migrations have already been applied to the current Supabase database. The candidate-profile migration has not. Apply it before restarting the API. The current model reads those profile columns, and a restart before the migration will make profile requests fail.
+The source, category, and candidate-profile migrations have already been applied to the current Supabase database. Do not run them again.
 
-Authentication, claim-code, and preparation tables are created when the API process starts. That startup step does not rewrite candidate or job rows.
-
-To issue a claim code for a passwordless profile:
+Authentication, email-verification, and preparation tables are created when the API process starts. That startup step does not rewrite candidate or job rows and does not drop the older claim-code tables. The same table creation is available as:
 
 ```powershell
-.\.venv\Scripts\python.exe backend\issue_claim_token.py --email name@example.com
+.\.venv\Scripts\python.exe backend\migrate_email_otp.py
 ```
 
-The command prints the code once. The database stores only its hash. The code expires after one hour and cannot be used twice. Five failed attempts lock further claim attempts for 15 minutes. Password login is not locked by those failures.
+Account setup emails a six-digit code. The database stores only an HMAC of that code, using `EMAIL_OTP_PEPPER`. The code expires after 10 minutes. A new code retires older unused codes. Five wrong checks lock further checks for 15 minutes and do not affect password login.
+
+For local development without a mailbox, set `APP_ENV=development` and `EMAIL_OTP_DEV_MODE=true` and leave SMTP unset. The code then appears on the Account setup screen. Production ignores `EMAIL_OTP_DEV_MODE` and never returns the code in the API response. On Render, set `APP_ENV=production`, `EMAIL_OTP_DEV_MODE=false`, a long random `EMAIL_OTP_PEPPER`, and the SMTP variables.
 
 ## Tests
 
@@ -175,6 +186,7 @@ Nothing in this repository deploys itself. Pushing code does not start Render or
 - Only Adzuna for India and the United Kingdom is integrated. Other providers and other Adzuna countries are not searched automatically.
 - Imports run from commands. There is no scheduled synchronisation.
 - Salary, currency, employment type, and workplace are shown only when those values are actually stored. Missing values are not invented.
-- There is no email-delivery service. Passwordless profiles cannot be claimed until an administrator issues a claim code.
+- Passwordless profiles can set a password only after the emailed code is verified. Production needs SMTP settings and `EMAIL_OTP_PEPPER`. Until those are set on Render, Account setup reports that email delivery is not configured.
+- Older administrator claim codes remain stored and are not accepted by Account setup.
 - Resume files and extracted resume text are not kept after the session ends.
 - The candidate-profile migration still has to be applied before the API is restarted.
