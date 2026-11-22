@@ -31,6 +31,12 @@ services:
         value: "false"
       - key: EMAIL_OTP_PEPPER
         sync: false
+      - key: EMAIL_PROVIDER
+        value: google_apps_script
+      - key: GOOGLE_APPS_SCRIPT_URL
+        sync: false
+      - key: GOOGLE_APPS_SCRIPT_SECRET
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

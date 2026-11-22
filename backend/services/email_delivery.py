@@ -1,18 +1,23 @@
-"""Send a setup code through SMTP.
+"""Send a verification code through the selected mail provider.
 
-The message body contains the code. The subject does not. Failures are logged
-as an exception type only, never as a password, code, or server reply.
+Google Apps Script is the production transport. SMTP remains available when
+EMAIL_PROVIDER is smtp or unset. Failures are logged as a category only.
 """
 
+import json
 import logging
 import smtplib
 import ssl
 from email.message import EmailMessage
 
-from settings import get_smtp_settings
+import requests
+
+from settings import get_email_provider, get_google_apps_script_settings, get_smtp_settings
 
 LOGGER = logging.getLogger("email_delivery")
 TIMEOUT_SECONDS = 10
+CONNECT_TIMEOUT_SECONDS = 10
+READ_TIMEOUT_SECONDS = 20
 
 
 class EmailDeliveryError(Exception):
@@ -40,6 +45,11 @@ def deliver_reset_code(recipient: str, otp: str) -> None:
 
 
 def _deliver(recipient: str, otp: str, subject: str, ignore_line: str) -> None:
+    if get_email_provider() == "google_apps_script":
+        _deliver_apps_script(recipient, otp)
+        return
+    if get_email_provider() != "smtp":
+        raise EmailDeliveryError("not-configured")
     settings = get_smtp_settings()
     if not settings["host"] or not settings["from_email"]:
         raise EmailDeliveryError("not-configured")
@@ -96,3 +106,70 @@ def _login_and_send(smtp, settings: dict, message: EmailMessage) -> None:
     if settings["username"]:
         smtp.login(settings["username"], settings["password"])
     smtp.send_message(message)
+
+
+def _deliver_apps_script(recipient: str, otp: str) -> None:
+    """POST the code to the configured web app. SMTP is not tried after a failure."""
+    settings = get_google_apps_script_settings()
+    if not settings["url"] or not settings["secret"]:
+        raise EmailDeliveryError("not-configured")
+    payload = {"secret": settings["secret"], "to": recipient, "otp": otp}
+    try:
+        response = _post_apps_script(settings["url"], payload)
+    except EmailDeliveryError:
+        raise
+    except requests.Timeout:
+        _fail("timeout")
+    except requests.TooManyRedirects:
+        _fail("redirect")
+    except requests.RequestException:
+        _fail("network")
+    _accept_apps_script_response(response)
+
+
+def _post_apps_script(url: str, payload: dict) -> requests.Response:
+    """POST JSON and follow the ContentService redirect to the final response."""
+    with requests.Session() as session:
+        return session.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
+            allow_redirects=True,
+        )
+
+
+def _accept_apps_script_response(response: requests.Response) -> None:
+    urls = [response.url, *[getattr(item, "url", "") for item in response.history]]
+    if any(not str(url).lower().startswith("https://") for url in urls):
+        _fail("redirect")
+    if response.status_code in {401, 403}:
+        _fail("unauthorized")
+    if response.status_code == 429:
+        _fail("quota")
+    if response.status_code >= 400:
+        _fail("http-error")
+    try:
+        body = response.json()
+    except ValueError:
+        _fail("invalid-json")
+    if isinstance(body, dict) and body.get("ok") is True:
+        return
+    _fail(_rejection_category(body))
+
+
+def _rejection_category(body) -> str:
+    """Map a rejected JSON body to a fixed category. The body itself is not logged."""
+    if not isinstance(body, dict):
+        return "rejected"
+    text = " ".join(str(body.get(key) or "") for key in ("error", "message", "reason")).lower()
+    if any(word in text for word in ("quota", "too many times", "daily limit")):
+        return "quota"
+    if any(word in text for word in ("unauthor", "forbidden", "secret", "permission")):
+        return "unauthorized"
+    return "rejected"
+
+
+def _fail(category: str) -> None:
+    LOGGER.warning("Apps Script delivery failed: %s", category)
+    raise EmailDeliveryError("delivery-failed")

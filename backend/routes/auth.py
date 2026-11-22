@@ -26,7 +26,7 @@ from services.auth_service import (
     setup_password,
 )
 from services.email_delivery import deliver_reset_code, deliver_setup_code
-from settings import dev_otp_fallback_allowed, get_email_otp_pepper, smtp_is_configured
+from settings import dev_otp_fallback_allowed, email_is_configured, get_email_otp_pepper
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -136,7 +136,7 @@ def send_otp(body: SendOtpBody, request: Request, repo: SqlAuthRepo = Depends(ge
         body.email,
         datetime.now(timezone.utc),
         pepper=get_email_otp_pepper(),
-        smtp_ready=smtp_is_configured(),
+        smtp_ready=email_is_configured(),
         dev_fallback=dev_otp_fallback_allowed(),
         send_email=deliver_setup_code,
         client_ip=_client_ip(request),
@@ -182,7 +182,7 @@ def send_reset(body: SendOtpBody, request: Request, repo: SqlAuthRepo = Depends(
             body.email,
             datetime.now(timezone.utc),
             pepper=get_email_otp_pepper(),
-            smtp_ready=smtp_is_configured(),
+            smtp_ready=email_is_configured(),
             dev_fallback=dev_otp_fallback_allowed(),
             send_email=deliver_reset_code,
             client_ip=_client_ip(request),

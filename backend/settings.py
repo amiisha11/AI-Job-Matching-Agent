@@ -97,6 +97,38 @@ def get_email_otp_pepper() -> str:
     return _configured_secret("EMAIL_OTP_PEPPER", "your_email_otp_pepper_here")
 
 
+def get_email_provider() -> str:
+    """Return smtp or google_apps_script. An empty value keeps the local SMTP path."""
+    value = os.getenv("EMAIL_PROVIDER", "").strip().lower()
+    if value in {"", "smtp"}:
+        return "smtp"
+    if value == "google_apps_script":
+        return "google_apps_script"
+    return ""
+
+
+def get_google_apps_script_settings() -> dict:
+    """Return the Apps Script web app URL and shared secret. Callers must not print the secret."""
+    url = os.getenv("GOOGLE_APPS_SCRIPT_URL", "").strip()
+    if url and not url.lower().startswith("https://"):
+        url = ""
+    return {
+        "url": url,
+        "secret": _configured_secret("GOOGLE_APPS_SCRIPT_SECRET", "your_google_apps_script_secret_here"),
+    }
+
+
+def email_is_configured() -> bool:
+    """True when the selected provider has the settings it needs. There is no SMTP fallback."""
+    provider = get_email_provider()
+    if provider == "google_apps_script":
+        settings = get_google_apps_script_settings()
+        return bool(settings["url"] and settings["secret"])
+    if provider == "smtp":
+        return smtp_is_configured()
+    return False
+
+
 def get_smtp_settings() -> dict:
     """Return SMTP settings. The password is included only for the mail client."""
     port_text = os.getenv("SMTP_PORT", "").strip()
