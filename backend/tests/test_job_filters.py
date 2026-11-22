@@ -113,7 +113,19 @@ class FilterTests(unittest.TestCase):
             {"country": "in", "label": "IT Jobs", "tag": "it-jobs"},
             {"country": "in", "label": "Legal Jobs", "tag": "legal-jobs"},
         ]
-        jobs = [listing(workplace="remote", contract_time="full_time", salary_min=10, salary_currency="GBP", source_country="us")]
+        jobs = [
+            listing(
+                workplace="remote",
+                contract_time="full_time",
+                salary_min=10,
+                salary_currency="GBP",
+                source_country="us",
+                category_label="IT Jobs",
+                category_tag="it-jobs",
+            ),
+            listing(id=2, category_label="Legal Jobs", category_tag="legal-jobs", source_country="gb"),
+        ]
+        categories.append({"country": "gb", "label": "Sales Jobs", "tag": "sales-jobs"})
 
         meta = build_filter_metadata(jobs, categories)
 
@@ -148,7 +160,14 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(first, [{"country": "gb", "label": "Teaching Jobs", "tag": "teaching-jobs"}])
         self.assertEqual(second, first)
         self.assertNotIn(SECRET, error or "")
-        self.assertEqual(build_filter_metadata([], first, error)["category_status"], "partial")
+        stored = build_filter_metadata(
+            [{"category_tag": "teaching-jobs", "category_label": ""}],
+            first,
+            error,
+        )
+        self.assertEqual(stored["categories"], [{"value": "teaching-jobs", "label": "Teaching Jobs"}])
+        self.assertEqual(stored["category_status"], "partial")
+        self.assertEqual(build_filter_metadata([], first, error)["category_status"], "unavailable")
         clear_category_cache()
 
 

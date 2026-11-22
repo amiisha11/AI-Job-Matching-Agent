@@ -108,8 +108,6 @@ class EnrichmentTests(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(bind=engine, tables=[Candidate.__table__, Job.__table__, SavedJob.__table__])
         with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE jobs ADD COLUMN category_label VARCHAR(200)"))
-            connection.execute(text("ALTER TABLE jobs ADD COLUMN category_tag VARCHAR(80)"))
             connection.execute(
                 text(
                     "CREATE TABLE provider_categories ("

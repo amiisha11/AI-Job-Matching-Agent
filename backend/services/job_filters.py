@@ -123,9 +123,9 @@ def job_matches(job, search: JobSearch) -> bool:
     return _text_matches(job, search.text)
 
 
-def build_filter_metadata(jobs, categories, category_error: str | None = None) -> dict:
-    """Options the Discover page can show. Empty lists mean the stored rows do not have that fact."""
-    industries = _industry_options(categories)
+def build_filter_metadata(jobs, categories=None, category_error: str | None = None) -> dict:
+    """Options the Discover page can show. Industry choices come from stored listings."""
+    industries = _industry_options(jobs, categories)
     if category_error and not industries:
         status = "unavailable"
     elif category_error:
@@ -145,14 +145,21 @@ def build_filter_metadata(jobs, categories, category_error: str | None = None) -
     }
 
 
-def _industry_options(categories) -> list[dict]:
-    grouped: dict[str, list[str]] = {}
-    order: list[str] = []
+def _industry_options(jobs, categories=None) -> list[dict]:
+    """One option per stored tag. A catalogue label is used only when the row has no label."""
+    catalogue: dict[str, str] = {}
     for item in categories or []:
         tag = _text(_value(item, "tag")).casefold()
         label = _text(_value(item, "label"))
-        if not tag or not label:
+        if tag and label and tag not in catalogue:
+            catalogue[tag] = label
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for job in jobs or []:
+        tag = _text(_value(job, "category_tag")).casefold()
+        if not tag:
             continue
+        label = _text(_value(job, "category_label")) or catalogue.get(tag) or tag
         if tag not in grouped:
             grouped[tag] = []
             order.append(tag)

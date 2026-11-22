@@ -566,7 +566,8 @@ def test_discover_filters_use_provider_categories_and_cache_them():
     ]
     with _discover(jobs=jobs, saved=[], matches=MATCHES, filters=catalogue) as (app, calls):
         text = _markdown(app)
-        assert "IT Jobs" in text
+        assert "Industry: IT Jobs" in text
+        assert "Industry: Legal Jobs" in text
         assert "Other / Not specified" in text
         assert "Industry categories could not be loaded" not in text
         assert sum(url.endswith("/jobs/filters") for _, url, _ in calls) == 1

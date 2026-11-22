@@ -126,6 +126,8 @@ class Job(Base):
         default=True,
         server_default=text("true"),
     )
+    category_label: Mapped[str | None] = mapped_column(String(200))
+    category_tag: Mapped[str | None] = mapped_column(String(80))
 
     saved_jobs: Mapped[list["SavedJob"]] = relationship(
         back_populates="job",

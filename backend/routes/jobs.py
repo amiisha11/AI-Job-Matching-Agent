@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session, selectinload
 from database import get_db
 from deps import ensure_owner, get_current_candidate
 from models import Candidate, Job, SavedJob
-from services.category_catalogue import cached_categories
 from services.job_filters import JobSearch, build_filter_metadata, filter_jobs, salary_needs_currency, search_from_params
 
 router = APIRouter(tags=["jobs"])
@@ -71,6 +70,8 @@ class JobRead(BaseModel):
     matchability_reason: str | None = None
     description_is_snippet: bool = False
     requirements_available: bool = True
+    category_label: str | None = None
+    category_tag: str | None = None
 
 
 class SaveJobRequest(BaseModel):
@@ -124,10 +125,9 @@ def create_job(payload: JobCreate, db: Session = Depends(get_db)) -> Job:
 
 @router.get("/jobs/filters")
 def read_job_filters(db: Session = Depends(get_db)) -> dict:
-    """Filter choices from stored jobs and the provider category catalogue."""
-    categories, error = cached_categories()
+    """Filter choices from the categories stored on the listings."""
     jobs = list(db.scalars(select(Job).order_by(Job.id)))
-    return build_filter_metadata(jobs, categories, error)
+    return build_filter_metadata(jobs)
 
 
 @router.get("/jobs/", response_model=list[JobRead])
