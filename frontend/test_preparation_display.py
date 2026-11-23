@@ -29,3 +29,13 @@ def test_progress_lines_follow_the_api_counts():
         {"completed": 0, "total": 0, "remaining": 0, "percent": 0, "finished": False}
     )
     assert empty is False
+
+
+def test_preparation_styles_use_shared_tokens():
+    css = Path(__file__).resolve().parent.joinpath("theme.py").read_text(encoding="utf-8")
+    assert ".prep-next" in css
+    assert "background: var(--surface-soft)" in css
+    assert "color: var(--text-secondary)" in css
+    assert "color: var(--ok)" in css
+    assert "#6D62C8" not in css
+    assert "#F4F2FB" not in css

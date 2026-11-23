@@ -28,12 +28,22 @@ def test_public_pages_share_the_account_card():
         labels = [widget.label for widget in signup.text_input]
         assert labels[:4] == ["Name", "Email", "Password", "Confirm password"]
         assert "<p class='section-label auth-card'>Sign up</p>" in _markdown(signup)
+        assert "8 to 128 characters" in _markdown(signup)
 
     with _mocked_app("Account setup") as (setup, _calls):
         text = _markdown(setup)
         assert "<p class='section-label auth-card'>Account setup</p>" in text
+        assert "1. Enter the registered email." in text
+        assert "The code expires in 10 minutes" in text
         assert any(item.value == "Set a password" for item in setup.title)
         assert any(button.label == "Back to login" for button in setup.button)
+
+    with _mocked_app("Forgot password") as (forgot, _calls):
+        text = _markdown(forgot)
+        assert "<p class='section-label auth-card'>Forgot password</p>" in text
+        assert "1. Enter the account email." in text
+        assert "returns you to login" in text
+        assert any(button.label == "Send OTP" for button in forgot.button)
 
 
 def test_signed_in_pages_keep_their_cards():

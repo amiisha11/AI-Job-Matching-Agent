@@ -28,9 +28,18 @@ from components import (
 )
 from display import (
     COUNTRY_NAMES,
+    EXPERIENCE_NOT_SPECIFIED,
+    INDUSTRY_NOT_SPECIFIED,
+    SALARY_NOT_PROVIDED,
+    WORKPLACE_NOT_SPECIFIED,
     adzuna_attribution,
+    employment_label,
+    experience_label,
+    industry_label,
     jooble_attribution,
     omit_repeated_jobs,
+    salary_label,
+    workplace_label,
     initials,
     job_heading,
     job_is_unmatchable,
@@ -76,61 +85,58 @@ def page_home(status: dict | None, status_error: str | None) -> None:
     """Dashboard for the signed-in candidate. Figures come from the API cache in this session."""
     st.markdown("<div class='home-dashboard'></div>", unsafe_allow_html=True)
     jobs_error, saved_error, match_error = _load_home_data()
-    if status_error:
-        status_line = "The local API is not reachable."
-    elif isinstance(status, dict):
-        status_line = str(status.get("message") or "API is running.")
-    else:
-        status_line = "API is running."
-    profile = st.session_state.get("profile") or {}
+    profile = st.session_state.get("profile") if isinstance(st.session_state.get("profile"), dict) else {}
     name = str(profile.get("name") or st.session_state.get("candidate_name") or "there")
     page_header(
         f"Hello, {name}",
-        "A snapshot of the jobs available to you, how they score, and what you have saved.",
+        "Review how stored roles score against your profile, save the ones you want to pursue, and check a resume against one job.",
         "Dashboard",
     )
-    st.markdown(
-        "<p class='home-note'>Every opportunity you explore brings you one step closer to your goals.</p>",
-        unsafe_allow_html=True,
-    )
-    with st.container(border=True):
-        st.markdown(
-            (
-                "<p class='eyebrow home-hero'>Welcome</p>"
-                "<p class='hero-lead'>Open a job list, review the ranking, or update the profile behind these numbers.</p>"
-                f"<p class='status-line'>{html.escape(status_line)}</p>"
-            ),
-            unsafe_allow_html=True,
-        )
-        discover_col, insights_col, profile_col = st.columns(3, gap="large")
-        with discover_col:
-            st.button("Discover Jobs", on_click=select_page, args=("Discover Jobs",))
-        with insights_col:
-            st.button("Match Insights", on_click=select_page, args=("Match Insights",), type="primary")
-        with profile_col:
-            st.button("My Profile", on_click=select_page, args=("My Profile",))
-
+    _render_home_actions()
     jobs = st.session_state.get("job_catalog")
     matches = st.session_state.get("matches")
     saved_jobs = st.session_state.get("saved_jobs")
-    _render_kpis(jobs, jobs_error, matches, match_error, saved_jobs, saved_error)
+    _render_kpis(jobs, jobs_error, matches, match_error, saved_jobs, saved_error, profile)
     for message in (jobs_error, saved_error, match_error):
         if message:
             st.error(message)
+    if status_error:
+        st.error("The local API is not reachable.")
     distribution_col, skill_col = st.columns(2, gap="large")
     with distribution_col:
         _render_distribution(matches, match_error)
     with skill_col:
         _render_skill_chart(matches, match_error)
-    st.markdown(
-        "<p class='home-note home-note-soft'>Small improvements today can create big opportunities tomorrow.</p>",
-        unsafe_allow_html=True,
-    )
     match_col, saved_col = st.columns(2, gap="large")
     with match_col:
         _render_recent_matches(matches, match_error)
     with saved_col:
         _render_recent_saved(saved_jobs, saved_error)
+
+
+def _render_home_actions() -> None:
+    """Open the existing workspace pages. Preparation plans stay on a selected job."""
+    actions = (
+        ("Discover Jobs", ":material/search:", "Discover Jobs", "home-open-discover", "secondary"),
+        ("Match Insights", ":material/insights:", "Match Insights", "home-open-insights", "primary"),
+        ("My Profile", ":material/person:", "My Profile", "home-open-profile", "secondary"),
+        ("Saved Jobs", ":material/bookmark:", "Saved Jobs", "home-open-saved", "secondary"),
+        ("Resume Centre", ":material/description:", "Resume Centre", "home-open-resume", "secondary"),
+    )
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<div class='home-actions'>"
+                "<p class='eyebrow home-hero'>Welcome</p>"
+                "<p class='hero-lead'>Continue with the part of your workspace you need next.</p>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+        columns = st.columns(len(actions), gap="small")
+        for column, (label, icon, page, key, kind) in zip(columns, actions):
+            with column:
+                st.button(label, icon=icon, on_click=select_page, args=(page,), key=key, type=kind)
 
 
 def _load_home_data() -> tuple[str | None, str | None, str | None]:
@@ -172,8 +178,8 @@ def _load_home_data() -> tuple[str | None, str | None, str | None]:
     return jobs_error, saved_error, match_error
 
 
-def _render_kpis(jobs, jobs_error, matches, match_error, saved_jobs, saved_error) -> None:
-    """Four figures. A failed request stays a dash instead of an invented zero."""
+def _render_kpis(jobs, jobs_error, matches, match_error, saved_jobs, saved_error, profile: dict) -> None:
+    """Figures from the loaded lists and the saved profile. A failed request stays a dash."""
     total_jobs = "—" if jobs_error or not isinstance(jobs, list) else str(len(jobs))
     if match_error or not isinstance(matches, list):
         matched = "—"
@@ -183,13 +189,18 @@ def _render_kpis(jobs, jobs_error, matches, match_error, saved_jobs, saved_error
         mean = average_match_score(matches)
         average = "—" if mean is None else format_score(mean)
     saved_count = "—" if saved_error or not isinstance(saved_jobs, list) else str(len(saved_jobs))
+    if profile.get("id"):
+        completion = f"{completion_percent(profile_sections(profile))}%"
+    else:
+        completion = "—"
     cards = (
         ("Total jobs", total_jobs, "Listings stored for matching", _KPI_ICONS["jobs"]),
         ("Jobs matched", matched, "Jobs scored for your profile", _KPI_ICONS["matched"]),
         ("Saved jobs", saved_count, "Roles you kept", _KPI_ICONS["saved"]),
-        ("Average match score", average, "Mean score of the ranked jobs", _KPI_ICONS["score"]),
+        ("Average match score", average, "Mean of the ranked scores", _KPI_ICONS["score"]),
+        ("Profile completion", completion, "Filled sections of your saved profile", _KPI_ICONS["profile"]),
     )
-    columns = st.columns(4, gap="medium")
+    columns = st.columns(len(cards), gap="small")
     for column, (label, value, note, icon) in zip(columns, cards):
         with column:
             with st.container(border=True):
@@ -219,6 +230,10 @@ _KPI_ICONS = {
     "score": (
         "<svg viewBox='0 0 24 24'><path d='M5 16l4-4 3 3 7-7'></path>"
         "<path d='M14 8h5v5'></path></svg>"
+    ),
+    "profile": (
+        "<svg viewBox='0 0 24 24'><circle cx='12' cy='8' r='3'></circle>"
+        "<path d='M6 19c1.2-2.4 3.3-3.5 6-3.5S16.8 16.6 18 19'></path></svg>"
     ),
 }
 
@@ -304,10 +319,7 @@ def _render_distribution(matches, match_error) -> None:
 def _render_skill_chart(matches, match_error) -> None:
     with st.container(border=True):
         st.markdown(
-            (
-                "<p class='section-label chart-card'>Skill match breakdown</p>"
-                "<p class='home-note'>Your next opportunity might be one skill away. Keep learning.</p>"
-            ),
+            "<p class='section-label chart-card'>Skill match breakdown</p>",
             unsafe_allow_html=True,
         )
         if match_error or not isinstance(matches, list):
@@ -611,14 +623,17 @@ def page_profile() -> None:
     """Edit the signed-in profile in place. The header uses the last saved record."""
     page_header(
         "My Profile",
-        "Update the details saved on your account. Your login email stays the same.",
+        "Saved details for this account. The login email stays the same.",
         "Profile",
     )
     st.markdown("<div class='profile-dashboard'></div>", unsafe_allow_html=True)
     notice = st.session_state.pop("_profile_notice", None)
+    info = st.session_state.pop("_profile_info", None)
     warning = st.session_state.pop("_profile_warning", None)
     if warning:
         st.warning(warning)
+    if info:
+        st.info(info)
     if notice:
         st.success(notice)
     _prepare_profile_choices()
@@ -627,6 +642,24 @@ def page_profile() -> None:
     _render_profile_header(profile if isinstance(profile, dict) else None)
     locked = isinstance(profile, dict) and bool(_display_text(profile.get("email")))
     _render_profile_editor(locked)
+    _render_account_settings(profile if isinstance(profile, dict) else None)
+
+
+def _render_account_settings(profile: dict | None) -> None:
+    """Show the signed-in account, then the existing change-password form."""
+    email = _display_text(profile.get("email")) if isinstance(profile, dict) else ""
+    account_line = (
+        f"Signed in as {email}."
+        if email
+        else "No saved email is loaded, so the account address is not shown."
+    )
+    st.markdown(
+        (
+            "<p class='section-label profile-account'>Account</p>"
+            f"<p class='form-hint'>{html.escape(account_line)}</p>"
+        ),
+        unsafe_allow_html=True,
+    )
     render_change_password()
 
 
@@ -649,48 +682,72 @@ def _render_profile_header(profile: dict | None) -> None:
         education = _display_text(profile.get("education")) or "Not specified"
         years = experience_text(profile.get("years_experience")) or "Not saved yet"
         mark = html.escape(initials(name) or "•")
+        saved_skills = _clean_items(profile.get("skills"))
+        saved_locations = _clean_items(profile.get("preferred_locations"))
+        skill_html = (
+            "<div class='chip-row'>"
+            + "".join(f'<span class="chip chip-exact">{html.escape(skill)}</span>' for skill in saved_skills)
+            + "</div>"
+            if saved_skills
+            else "<p class='hero-lead'>No skills saved yet.</p>"
+        )
+        location_html = (
+            "<div class='profile-highlight'>"
+            "<p class='section-label'>Locations</p>"
+            "<div class='chip-row'>"
+            + "".join(
+                f'<span class="chip chip-semantic">{html.escape(place)}</span>' for place in saved_locations
+            )
+            + "</div></div>"
+            if saved_locations
+            else ""
+        )
         st.markdown(
             (
+                "<div class='profile-overview-grid'>"
                 "<div class='profile-identity'>"
                 f"<div class='avatar'>{mark}</div>"
-                "<div>"
+                "<div class='profile-id-copy'>"
                 "<p class='section-label profile-overview'>Candidate Profile</p>"
                 f"<h3 class='match-title'>{html.escape(name)}</h3>"
                 f"<p class='match-company'>{html.escape(email)}</p>"
-                "</div></div>"
+                "<div class='profile-facts'>"
                 f"<p class='detail-line'>Education: {html.escape(education)}</p>"
                 f"<p class='detail-line'>Years of experience: {html.escape(years)}</p>"
+                "</div></div></div>"
+                "<div class='profile-completion-panel'>"
                 "<p class='section-label profile-completion'>Profile completion</p>"
                 f"<p class='profile-percent'>{percent}%</p>"
                 "<span class='progress-track'>"
                 f"<span class='progress-fill' style='width: {percent}%'></span>"
                 "</span>"
                 f"<p class='hero-lead'>{filled_section_count(sections)} of {len(sections)} sections filled</p>"
+                "</div></div>"
+                "<div class='profile-highlights'>"
+                "<div class='profile-highlight'>"
+                "<p class='section-label'>Skills</p>"
+                f"{skill_html}"
+                f"<p class='form-hint'>{html.escape(SKILL_NOTE)}</p>"
+                "</div>"
+                f"{location_html}"
+                "</div>"
             ),
             unsafe_allow_html=True,
         )
-        saved_skills = _clean_items(profile.get("skills"))
-        if saved_skills:
-            chips(saved_skills, "exact")
-        else:
-            st.markdown("<p class='hero-lead'>No skills saved yet.</p>", unsafe_allow_html=True)
-        st.markdown(f"<p class='hero-lead'>{html.escape(SKILL_NOTE)}</p>", unsafe_allow_html=True)
-        saved_locations = _clean_items(profile.get("preferred_locations"))
-        if saved_locations:
-            chips(saved_locations, "semantic")
         suggestions = section_suggestions(sections)
-        if suggestions:
-            st.markdown("<p class='section-label profile-completion'>Suggestions</p>", unsafe_allow_html=True)
-            for hint in suggestions:
-                st.markdown(f"<p class='hero-lead'>{html.escape(hint)}</p>", unsafe_allow_html=True)
         with st.expander("How is profile completion calculated?"):
             criteria = "".join(
                 f"<li>{html.escape(section['label'])}</li>" for section in sections
             )
+            suggestion_html = ""
+            if suggestions:
+                lines = "".join(f"<li>{html.escape(hint)}</li>" for hint in suggestions)
+                suggestion_html = f"<ul class='completion-criteria'>{lines}</ul>"
             st.markdown(
                 (
                     f"<p class='completion-help'>{html.escape(COMPLETION_EXPLANATION)}</p>"
                     f"<ul class='completion-criteria'>{criteria}</ul>"
+                    f"{suggestion_html}"
                 ),
                 unsafe_allow_html=True,
             )
@@ -744,26 +801,7 @@ def _capture_draft() -> None:
     step. The draft keeps the earlier answers so saving does not wipe them.
     """
     draft = dict(st.session_state.get("profile_draft") or {})
-    for key in (
-        "profile_name",
-        "profile_email",
-        "profile_education",
-        "custom_education",
-        "profile_years",
-        "profile_degree",
-        "custom_degree",
-        "profile_field",
-        "custom_field",
-        "profile_specialization",
-        "profile_institution",
-        "profile_graduation",
-        "profile_skills",
-        "profile_roles",
-        "profile_locations",
-        "profile_industries",
-        "profile_countries",
-        "profile_remote",
-    ):
+    for key in _PROFILE_WIDGET_KEYS:
         if key in st.session_state:
             draft[key] = st.session_state[key]
     st.session_state.profile_draft = draft
@@ -776,13 +814,48 @@ def _restore_draft() -> None:
             st.session_state[key] = value
 
 
-def _set_builder_step(step: int) -> None:
-    _capture_draft()
-    st.session_state.profile_builder_step = step
+_PROFILE_WIDGET_KEYS = (
+    "profile_name",
+    "profile_email",
+    "profile_education",
+    "custom_education",
+    "profile_years",
+    "profile_degree",
+    "custom_degree",
+    "profile_field",
+    "custom_field",
+    "profile_specialization",
+    "profile_institution",
+    "profile_graduation",
+    "profile_skills",
+    "profile_roles",
+    "profile_locations",
+    "profile_industries",
+    "profile_countries",
+    "profile_remote",
+    "custom_skill",
+    "custom_role",
+    "custom_location",
+)
 
 
 def _clear_selected_skills() -> None:
     st.session_state.profile_skills = []
+
+
+def _remove_selected_item(selected_key: str, item: str) -> None:
+    """Drop one selected value. Matching ignores case and keeps the other entries."""
+    current = [str(value) for value in (st.session_state.get(selected_key) or [])]
+    st.session_state[selected_key] = [value for value in current if value.casefold() != item.casefold()]
+
+
+def _cancel_profile_edits() -> None:
+    """Return the form to the last saved profile without sending a request."""
+    for key in _PROFILE_WIDGET_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state.profile_draft = {}
+    st.session_state._profile_form_ready = False
+    st.session_state._profile_info = "Edits discarded. The form shows the last saved profile."
 
 
 def _drafted(key: str, default):
@@ -851,15 +924,6 @@ def _merge_choices(options_key: str, extras: list[str]) -> None:
     st.session_state[options_key] = options
 
 
-def _render_builder_progress(step: int) -> None:
-    labels = ["Education", "Skills", "Career", "Location"]
-    pieces = []
-    for index, label in enumerate(labels, start=1):
-        kind = " current" if step == index or (step > 4 and index == 4) else ""
-        pieces.append(f"<span class='builder-step{kind}'>{index}. {html.escape(label)}</span>")
-    st.markdown(f"<div class='builder-steps'>{''.join(pieces)}</div>", unsafe_allow_html=True)
-
-
 def _render_optional_choice(label: str, choice_key: str, custom_key: str, options: list[str], noun: str) -> None:
     choice = st.selectbox(label, options, key=choice_key)
     if choice == "Other":
@@ -867,69 +931,67 @@ def _render_optional_choice(label: str, choice_key: str, custom_key: str, option
 
 
 def _render_profile_editor(email_locked: bool) -> None:
-    """Four guided steps plus a review. Each step can save the whole profile."""
+    """Edit every saved profile section on one page, then save or cancel."""
     _restore_draft()
-    step = int(st.session_state.get("profile_builder_step") or 1)
-    if step < 1 or step > 5:
-        step = 1
-        st.session_state.profile_builder_step = 1
-    _render_builder_progress(step)
     catalogue_error = _load_builder_catalogue()
     catalogue = st.session_state.get("builder_catalogue") if isinstance(st.session_state.get("builder_catalogue"), dict) else {}
     _merge_choices("skill_choices", list(SKILL_OPTIONS) + list(catalogue.get("skill_names") or []))
     _merge_choices("role_choices", list(ROLE_OPTIONS) + list(catalogue.get("titles") or []))
-    # Every step stays registered so a selection is not dropped when it is collapsed.
-    with st.expander("Education and background", expanded=step == 1):
-        _render_education_step(email_locked)
-    with st.expander("Skills", expanded=step == 2):
-        _render_skills_step()
-    with st.expander("Career preferences", expanded=step == 3):
-        _render_career_step(catalogue_error)
-    with st.expander("Location preferences", expanded=step == 4):
-        _render_location_step(catalogue_error)
-    with st.expander("Profile summary", expanded=step == 5):
-        _render_profile_summary()
-    back_col, next_col, skip_col, save_col = st.columns(4)
-    with back_col:
-        st.button("Back", disabled=step == 1, on_click=_set_builder_step, args=(max(1, step - 1),))
-    with next_col:
-        if step < 5:
-            st.button("Continue", on_click=_set_builder_step, args=(step + 1,))
-    with skip_col:
-        if step == 1:
-            st.button("Skip optional fields", on_click=_set_builder_step, args=(2,))
-    with save_col:
-        submitted = st.button("Save Changes", type="primary")
+    _render_personal_step(email_locked)
+    _render_education_step()
+    _render_skills_step()
+    _render_career_step(catalogue_error)
+    _render_location_step(catalogue_error)
+    with st.container(border=True):
+        st.markdown("<p class='section-label profile-actions'>Save or discard</p>", unsafe_allow_html=True)
+        save_col, cancel_col = st.columns(2)
+        with save_col:
+            submitted = st.button("Save Changes", type="primary")
+        with cancel_col:
+            st.button("Cancel", on_click=_cancel_profile_edits)
     _capture_draft()
     if not submitted:
         return
     _save_profile()
 
 
-def _render_education_step(email_locked: bool) -> None:
+def _render_personal_step(email_locked: bool) -> None:
     with st.container(border=True):
         st.markdown(
             (
-                "<p class='section-label profile-card profile-builder'>Education and background</p>"
-                "<p class='form-hint'>Name can be updated. Email stays the address you used to log in. "
-                "Degree, field, specialization, institution, and graduation year can be left blank.</p>"
+                "<p class='section-label profile-card'>Personal details</p>"
+                "<p class='form-hint'>Name and experience can be updated. Email stays the login address.</p>"
             ),
             unsafe_allow_html=True,
         )
         left, right = st.columns(2, gap="large")
         with left:
             st.text_input("Name", key="profile_name")
-            education_choice = st.selectbox("Education", EDUCATION_OPTIONS, key="profile_education")
-            _render_optional_choice("Degree", "profile_degree", "custom_degree", DEGREE_OPTIONS, "degree")
-            _render_optional_choice("Field of study", "profile_field", "custom_field", FIELD_OPTIONS, "field of study")
-        with right:
             st.text_input("Email", key="profile_email", disabled=email_locked)
+        with right:
             st.selectbox(
                 "Years of experience",
                 EXPERIENCE_YEARS,
                 key="profile_years",
                 format_func=lambda years: "Less than 1 year" if years == 0 else f"{years} {'year' if years == 1 else 'years'}",
             )
+
+
+def _render_education_step() -> None:
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<p class='section-label profile-card profile-builder'>Education and background</p>"
+                "<p class='form-hint'>Choose a listed level or type your own. The other fields are optional.</p>"
+            ),
+            unsafe_allow_html=True,
+        )
+        left, right = st.columns(2, gap="large")
+        with left:
+            education_choice = st.selectbox("Education", EDUCATION_OPTIONS, key="profile_education")
+            _render_optional_choice("Degree", "profile_degree", "custom_degree", DEGREE_OPTIONS, "degree")
+            _render_optional_choice("Field of study", "profile_field", "custom_field", FIELD_OPTIONS, "field of study")
+        with right:
             st.text_input("Specialization", key="profile_specialization", placeholder="Optional")
             st.text_input("Institution", key="profile_institution", placeholder="Optional")
             st.text_input("Graduation year", key="profile_graduation", placeholder="Optional, for example 2024")
@@ -942,14 +1004,23 @@ def _render_skills_step() -> None:
         st.markdown(
             (
                 "<p class='section-label profile-card'>Skills</p>"
-                f"<p class='hero-lead'>{html.escape(SKILL_NOTE)}</p>"
-                "<p class='hero-lead'>Search the suggestions, add your own, and remove a skill from the selection before saving.</p>"
+                "<p class='form-hint'>Search the suggestions or add your own. A repeated skill is kept once.</p>"
             ),
             unsafe_allow_html=True,
         )
         selected = _session_list("profile_skills", "skills")
         if selected:
             chips(selected, "exact")
+            for start in range(0, len(selected), 3):
+                row = selected[start:start + 3]
+                columns = st.columns(len(row))
+                for column, skill in zip(columns, row):
+                    column.button(
+                        f"Remove {skill}",
+                        key=f"remove-skill-{skill.casefold()}",
+                        on_click=_remove_selected_item,
+                        args=("profile_skills", skill),
+                    )
         else:
             st.markdown("<p class='hero-lead'>No skills selected yet.</p>", unsafe_allow_html=True)
         _choice_picker(
@@ -973,46 +1044,52 @@ def _render_career_step(catalogue_error: str | None) -> None:
         st.markdown(
             (
                 "<p class='section-label profile-card'>Career preferences</p>"
-                "<p class='hero-lead'>Industries come from the provider category catalogue. "
-                "They can be used in Discover Jobs. They do not change the match score.</p>"
+                "<p class='form-hint'>Roles are saved on the profile. Industries come from the catalogue and do not change the match score.</p>"
             ),
             unsafe_allow_html=True,
         )
-        if industries:
-            labels = {item["tag"]: item["label"] for item in industries}
-            options = [item["tag"] for item in industries]
-            for saved in _session_list("profile_industries", "preferred_industries"):
-                if saved not in options:
-                    options.append(saved)
-                    labels.setdefault(saved, saved)
-            st.multiselect(
-                "Preferred industries",
-                options,
-                key="profile_industries",
-                format_func=lambda tag: labels.get(tag, tag),
-                placeholder="Search industries",
+        role_col, industry_col = st.columns(2, gap="large")
+        with industry_col:
+            _render_industry_choices(industries, catalogue_error)
+        with role_col:
+            _choice_picker(
+                "Preferred roles",
+                "role_choices",
+                "profile_roles",
+                "custom_role",
+                "role_notice",
+                "role",
+                "Search roles",
             )
-        else:
-            st.markdown(
-                "<p class='hero-lead'>The industry catalogue is not available right now, so no industries are listed.</p>",
-                unsafe_allow_html=True,
-            )
-            if catalogue_error:
-                st.warning(catalogue_error)
-        _choice_picker(
-            "Preferred roles",
-            "role_choices",
-            "profile_roles",
-            "custom_role",
-            "role_notice",
-            "role",
-            "Search roles",
-        )
         with st.expander("Role suggestions"):
             st.markdown(
-                "<p class='hero-lead'>Suggestions include titles from stored listings and roles already saved on your profile. A custom role is kept.</p>",
+                "<p class='form-hint'>Suggestions include titles from stored listings and roles already saved. A custom role is kept.</p>",
                 unsafe_allow_html=True,
             )
+
+
+def _render_industry_choices(industries: list, catalogue_error: str | None) -> None:
+    if industries:
+        labels = {item["tag"]: item["label"] for item in industries}
+        options = [item["tag"] for item in industries]
+        for saved in _session_list("profile_industries", "preferred_industries"):
+            if saved not in options:
+                options.append(saved)
+                labels.setdefault(saved, saved)
+        st.multiselect(
+            "Preferred industries",
+            options,
+            key="profile_industries",
+            format_func=lambda tag: labels.get(tag, tag),
+            placeholder="Search industries",
+        )
+        return
+    st.markdown(
+        "<p class='form-hint'>The industry catalogue is not available right now, so no industries are listed.</p>",
+        unsafe_allow_html=True,
+    )
+    if catalogue_error:
+        st.warning(catalogue_error)
 
 
 def _render_location_step(catalogue_error: str | None) -> None:
@@ -1022,80 +1099,48 @@ def _render_location_step(catalogue_error: str | None) -> None:
         st.markdown(
             (
                 "<p class='section-label profile-card'>Location preferences</p>"
-                "<p class='hero-lead'>Live provider coverage currently includes India and the United Kingdom. "
-                "A country appears here when the provider configuration includes it. "
-                "Cities and regions are used for location matching. Remote preference is stored separately and does not change the match score.</p>"
+                "<p class='form-hint'>Cities and regions are used for location matching. Remote preference is stored separately.</p>"
             ),
             unsafe_allow_html=True,
         )
-        if countries:
-            labels = {item["code"]: item["label"] for item in countries}
-            options = [item["code"] for item in countries]
-            for saved in _session_list("profile_countries", "preferred_countries"):
-                if saved not in options:
-                    options.append(saved)
-                    labels.setdefault(saved, saved)
-            st.multiselect(
-                "Preferred countries",
-                options,
-                key="profile_countries",
-                format_func=lambda code: labels.get(code, code),
-                placeholder="Search countries",
+        country_col, place_col = st.columns(2, gap="large")
+        with country_col:
+            _render_country_choices(countries, catalogue_error)
+            st.selectbox("Remote preference", REMOTE_OPTIONS, key="profile_remote")
+        with place_col:
+            _choice_picker(
+                "Preferred locations",
+                "location_choices",
+                "profile_locations",
+                "custom_location",
+                "location_notice",
+                "location",
+                "Search cities",
             )
-        else:
-            st.markdown(
-                "<p class='hero-lead'>Country coverage is not available right now, so no countries are listed.</p>",
-                unsafe_allow_html=True,
-            )
-            if catalogue_error:
-                st.warning(catalogue_error)
-        st.selectbox("Remote preference", REMOTE_OPTIONS, key="profile_remote")
-        _choice_picker(
-            "Preferred locations",
-            "location_choices",
-            "profile_locations",
-            "custom_location",
-            "location_notice",
-            "location",
-            "Search cities",
-        )
 
 
-def _render_profile_summary() -> None:
-    with st.container(border=True):
-        st.markdown(
-            (
-                "<p class='section-label profile-card'>Profile summary</p>"
-                "<p class='hero-lead'>This is the profile that will be saved. Match scores still use skills, preferred roles, and preferred locations only.</p>"
-            ),
-            unsafe_allow_html=True,
+def _render_country_choices(countries: list, catalogue_error: str | None) -> None:
+    if countries:
+        labels = {item["code"]: item["label"] for item in countries}
+        options = [item["code"] for item in countries]
+        for saved in _session_list("profile_countries", "preferred_countries"):
+            if saved not in options:
+                options.append(saved)
+                labels.setdefault(saved, saved)
+        st.multiselect(
+            "Preferred countries",
+            options,
+            key="profile_countries",
+            format_func=lambda code: labels.get(code, code),
+            placeholder="Search countries",
         )
-        rows = [
-            ("Name", _session_text("profile_name") or "Not entered"),
-            ("Email", _session_text("profile_email") or "Not entered"),
-            ("Education", _session_text("profile_education", "Not specified")),
-            ("Degree", _session_text("profile_degree", "Not specified")),
-            ("Field of study", _session_text("profile_field", "Not specified")),
-            ("Specialization", _session_text("profile_specialization") or "Not entered"),
-            ("Institution", _session_text("profile_institution") or "Not entered"),
-            ("Graduation year", _session_text("profile_graduation") or "Not entered"),
-            ("Experience", _session_text("profile_years", "0")),
-            ("Remote preference", _session_text("profile_remote", "Not specified")),
-        ]
-        for label, value in rows:
-            st.markdown(f"<p class='detail-line'>{html.escape(label)}: {html.escape(value)}</p>", unsafe_allow_html=True)
-        for label, key, field in (
-            ("Skills", "profile_skills", "skills"),
-            ("Roles", "profile_roles", "preferred_roles"),
-            ("Industries", "profile_industries", "preferred_industries"),
-            ("Countries", "profile_countries", "preferred_countries"),
-            ("Locations", "profile_locations", "preferred_locations"),
-        ):
-            values = _session_list(key, field)
-            st.markdown(
-                f"<p class='detail-line'>{html.escape(label)}: {html.escape(', '.join(values) if values else 'None selected')}</p>",
-                unsafe_allow_html=True,
-            )
+        return
+    st.markdown(
+        "<p class='form-hint'>Country coverage is not available right now, so no countries are listed.</p>",
+        unsafe_allow_html=True,
+    )
+    if catalogue_error:
+        st.warning(catalogue_error)
 
 
 def _save_profile() -> None:
@@ -1218,7 +1263,7 @@ def page_discover() -> None:
     """Search stored listings and show scores from the matching service."""
     page_header(
         "Discover Jobs",
-        "Search the stored listings. A keyword search for India or the United Kingdom also checks Jooble live results.",
+        "Search stored listings. A keyword for India or the United Kingdom also checks Jooble live results.",
         "Jobs",
     )
     st.markdown("<div class='discover-page'></div>", unsafe_allow_html=True)
@@ -1254,9 +1299,10 @@ def page_discover() -> None:
         st.warning(filters_error)
     if saved_error:
         st.warning(saved_error)
-    noun = "listing" if len(jobs) == 1 else "listings"
     st.markdown(
-        f"<p class='status-line'>{len(jobs)} {noun} match.</p>",
+        _discover_status(
+            jobs, query, industry, country, location_text, workplace, employment, experience, currency, choices
+        ),
         unsafe_allow_html=True,
     )
     if not jobs:
@@ -1399,9 +1445,20 @@ def _discover_controls(choices: dict):
     if st.session_state.get("discover_salary_currency") not in currencies:
         st.session_state.discover_salary_currency = "any"
     with st.container(border=True):
-        st.markdown("<p class='section-label discover-filters'>Search and filters</p>", unsafe_allow_html=True)
-        query = st.text_input("Search jobs", key="discover_query", placeholder="Title, company, or skill")
-        industry_col, country_col, location_col = st.columns(3)
+        st.markdown(
+            (
+                "<p class='section-label discover-filters'>Search</p>"
+                "<p class='form-hint'>Results update from these fields. "
+                "Jooble is checked only for a keyword in India or the United Kingdom.</p>"
+            ),
+            unsafe_allow_html=True,
+        )
+        search_col, location_col = st.columns([2, 1])
+        with search_col:
+            query = st.text_input("Search jobs", key="discover_query", placeholder="Title, company, or skill")
+        with location_col:
+            location_text = st.text_input("Location", key="discover_location_text", placeholder="City, state, or region")
+        industry_col, country_col = st.columns(2)
         with industry_col:
             industry = st.selectbox("Industry", [item["value"] for item in industries], key="discover_industry", format_func=_label_for(industries))
             saved_profile = st.session_state.get("profile") if isinstance(st.session_state.get("profile"), dict) else {}
@@ -1413,8 +1470,6 @@ def _discover_controls(choices: dict):
                 st.caption("Your saved industries can be selected here. They do not change the match score.")
         with country_col:
             country = st.selectbox("Country", [item["value"] for item in countries], key="discover_country", format_func=_label_for(countries))
-        with location_col:
-            location_text = st.text_input("Location", key="discover_location_text", placeholder="City, state, or region")
         detail_filters = [
             ("Work arrangement", workplaces, "discover_workplace"),
             ("Employment type", employment_types, "discover_employment"),
@@ -1462,6 +1517,59 @@ def _discover_controls(choices: dict):
         if choices["category_status"] == "unavailable":
             st.caption("The provider category list could not be loaded. Listings without a stored category stay under Other / Not specified.")
     return query, industry, country, location_text, workplace, employment, experience, currency, salary_min, salary_max, sort_by
+
+
+def _choice_label(rows: list[dict], value: str) -> str:
+    for item in rows:
+        if item["value"] == value:
+            return item["label"]
+    return value
+
+
+def _discover_status(
+    jobs: list[dict],
+    query: str,
+    industry: str,
+    country: str,
+    location_text: str,
+    workplace: str,
+    employment: str,
+    experience: str,
+    currency: str,
+    choices: dict,
+) -> str:
+    """Count real results and name the filters that are actually applied."""
+    count = len(jobs)
+    noun = "listing" if count == 1 else "listings"
+    live = sum(1 for job in jobs if str(job.get("source") or "").casefold() == "jooble")
+    stored = count - live
+    lines = [f"{count} {noun} match."]
+    if live:
+        live_noun = "result" if live == 1 else "results"
+        lines.append(
+            f"{stored} from the stored catalogue. {live} live Jooble {live_noun}. "
+            "Live Jooble results are not saved."
+        )
+    else:
+        lines.append("Stored catalogue results.")
+    country_rows = [{"value": "worldwide", "label": "Worldwide"}, *choices["countries"]]
+    active = [f"Country: {_choice_label(country_rows, country)}"]
+    if str(query or "").strip():
+        active.append(f"Keyword: {str(query).strip()}")
+    if industry not in {"", "all"}:
+        active.append(f"Industry: {_choice_label(choices['categories'], industry)}")
+    if str(location_text or "").strip():
+        active.append(f"Location: {str(location_text).strip()}")
+    if workplace not in {"", "any"}:
+        active.append(f"Work arrangement: {_choice_label(choices['workplaces'], workplace)}")
+    if employment not in {"", "any"}:
+        active.append(f"Employment type: {_choice_label(choices['employment_types'], employment)}")
+    if experience not in {"", "any"}:
+        active.append(f"Experience: {_choice_label(choices['experience'], experience)}")
+    if currency not in {"", "any"}:
+        active.append(f"Salary currency: {currency}")
+    lines.append("Filters: " + " · ".join(active))
+    return "".join(f"<p class='status-line'>{html.escape(line)}</p>" for line in lines)
 
 
 def _label_for(rows: list[dict]):
@@ -1632,12 +1740,12 @@ def _render_job_detail(job: dict, match) -> None:
 
 
 def _render_job_grid(jobs: list[dict], ranked: dict, saved_ids: set[int]) -> None:
-    """Three cards per row. The last row keeps the same column width when fewer jobs remain."""
+    """Two cards per row. A short last row keeps the same card width."""
     with st.container():
         st.markdown("<div class='discover-grid'></div>", unsafe_allow_html=True)
-        for start in range(0, len(jobs), 3):
-            batch = jobs[start : start + 3]
-            columns = st.columns(3, gap="medium")
+        for start in range(0, len(jobs), 2):
+            batch = jobs[start : start + 2]
+            columns = st.columns(2, gap="medium")
             for column, job in zip(columns, batch):
                 with column:
                     _render_job_card(job, ranked.get(job_key(job.get("id"))), job_key(job.get("id")) in saved_ids)
@@ -1646,20 +1754,22 @@ def _render_job_grid(jobs: list[dict], ranked: dict, saved_ids: set[int]) -> Non
 def _render_job_card(job: dict, match, already_saved: bool) -> None:
     with st.container(border=True):
         if job_is_unmatchable(job):
-            score = unavailable_score_html()
+            score = (
+                "<p class='hero-lead discover-score'>"
+                "Match score unavailable — insufficient verified skill information."
+                "</p>"
+            )
         elif isinstance(match, dict):
             score = f"<p class='score-value discover-score'>Match {html.escape(format_score(match['total_score']))}</p>"
         else:
             score = "<p class='hero-lead discover-score'>Not ranked yet</p>"
         st.markdown(
             (
+                "<div class='discover-card-body'>"
                 f"{_card_heading(job)}"
+                f"{_card_meta_html(job)}"
                 f"{score}"
-                f"{listing_notes_html(job)}"
-                f"{_jooble_snippet(job)}"
-                f"{adzuna_attribution(job)}"
-                f"{jooble_attribution(job)}"
-                f"{original_listing_link(job)}"
+                "</div>"
             ),
             unsafe_allow_html=True,
         )
@@ -1671,6 +1781,11 @@ def _render_job_card(job: dict, match, already_saved: bool) -> None:
                 f"<p class='discover-more'>+{extra} more in details</p>",
                 unsafe_allow_html=True,
             )
+        link = original_listing_link(job)
+        st.markdown(
+            f"<div class='discover-actions'>{link}</div>" if link else "<div class='discover-actions'></div>",
+            unsafe_allow_html=True,
+        )
         detail_col, save_col = st.columns(2)
         with detail_col:
             st.button("View details", key=f"detail-{job['id']}", on_click=_select_job, args=(job["id"],))
@@ -1683,8 +1798,38 @@ def _render_job_card(job: dict, match, already_saved: bool) -> None:
                 save_job(job)
 
 
+def _card_meta_html(job: dict) -> str:
+    """Show listing facts that were actually supplied. Missing facts stay off the card."""
+    lines = []
+    industry = industry_label(job)
+    if industry != INDUSTRY_NOT_SPECIFIED:
+        lines.append(f"Industry: {industry}")
+    experience = experience_label(job)
+    if experience != EXPERIENCE_NOT_SPECIFIED:
+        lines.append(experience)
+    employment = employment_label(job)
+    if employment:
+        lines.append(f"Employment type: {employment}")
+    salary = salary_label(job)
+    if salary != SALARY_NOT_PROVIDED:
+        lines.append(salary)
+    workplace = workplace_label(job)
+    if workplace != WORKPLACE_NOT_SPECIFIED:
+        lines.append(workplace)
+    posted = str(job.get("posted_at") or "").strip()
+    if posted and posted.casefold() != "none":
+        label = "Updated" if str(job.get("source") or "").casefold() == "jooble" else "Posted"
+        lines.append(f"{label}: {posted.replace('T', ' ')[:16]}")
+    publisher = " ".join(str(job.get("publisher") or "").split())
+    if publisher and str(job.get("source") or "").casefold() == "jooble":
+        lines.append(f"Publisher: {publisher}")
+    return "".join(f"<p class='detail-line discover-meta'>{html.escape(line)}</p>" for line in lines)
+
+
 def _card_heading(job: dict) -> str:
     """Short card text. The details panel keeps the full title."""
+    badge = adzuna_attribution(job) or jooble_attribution(job)
+    badge_html = f"<div class='discover-badge'>{badge}</div>" if badge else ""
     title = html.escape(short_text(job.get("title") or "Untitled role", 72))
     company_text = short_text(job.get("company") or "", 48)
     location_text = short_text(job.get("location") or "", 48)
@@ -1698,6 +1843,7 @@ def _card_heading(job: dict) -> str:
     if country and country.casefold() not in location.casefold():
         location = f"{location} · {country}" if location else country
     return (
+        f"{badge_html}"
         f"<h3 class='match-title discover-card'>{title}</h3>"
         f"<p class='match-company'>{company}</p>"
         f"<p class='match-location'>{html.escape(location)}</p>"
@@ -1801,6 +1947,26 @@ def _jooble_snippet(job: dict) -> str:
     return f"<p class='detail-line'>{html.escape(short_text(text, 160))}</p>"
 
 
+def _close_selected_job() -> None:
+    """Leave the open listing and its plan. The current page stays put."""
+    st.session_state.selected_job_id = None
+
+
+def _prep_context(job: dict) -> str:
+    """The job this plan belongs to. Missing source stays off the header."""
+    title = html.escape(str(job.get("title") or "Untitled role"))
+    company = html.escape(" ".join(str(job.get("company") or "").split()))
+    location = html.escape(" ".join(str(job.get("location") or "").split()))
+    place = " · ".join(part for part in (company, location) if part)
+    place_html = f"<p class='match-company prep-job'>{place}</p>" if place else ""
+    source = str(job.get("source") or "").strip()
+    source_html = ""
+    if source:
+        label = {"adzuna": "Adzuna", "jooble": "Jooble"}.get(source.casefold(), source)
+        source_html = f"<p class='detail-line prep-source'>Source: {html.escape(label)}</p>"
+    return f"<p class='match-title prep-job'>{title}</p>{place_html}{source_html}"
+
+
 def _render_preparation(job: dict) -> None:
     """Show the signed-in candidate's plan for this job only."""
     job_id = job.get("id")
@@ -1813,11 +1979,14 @@ def _render_preparation(job: dict) -> None:
         st.markdown(
             (
                 "<p class='section-label prep-plan'>My Preparation Plan</p>"
+                f"{_prep_context(job)}"
                 "<p class='prep-note'>These tasks are suggestions for your own preparation. "
-                "They are not the employer's selection process.</p>"
+                "They are not the employer's selection process. "
+                "This plan stays with the job above. Back to the list closes it without changing the page.</p>"
             ),
             unsafe_allow_html=True,
         )
+        st.button("Back to the list", key="prep-close", on_click=_close_selected_job)
         if error or not isinstance(plan, dict):
             st.error(error or "The preparation plan could not be read.")
             return
@@ -1832,9 +2001,13 @@ def _render_preparation(job: dict) -> None:
 
 
 def _render_plan_progress(plan: dict) -> None:
-    fraction, counts, finished = progress_lines(plan.get("progress"))
-    percent = int((plan.get("progress") or {}).get("percent") or 0)
-    st.progress(min(max(percent, 0), 100) / 100, text=fraction)
+    progress = plan.get("progress")
+    if not isinstance(progress, dict):
+        return
+    fraction, counts, finished = progress_lines(progress)
+    percent = progress.get("percent")
+    if isinstance(percent, int):
+        st.progress(min(max(percent, 0), 100) / 100, text=fraction)
     st.markdown(
         f"<p class='prep-count'>{html.escape(fraction)} · {html.escape(counts)}</p>",
         unsafe_allow_html=True,
@@ -1850,8 +2023,15 @@ def _render_plan_tasks(job_id: int, tasks: list[dict]) -> None:
     if not tasks:
         empty_state(
             "No preparation tasks yet",
-            "Add a task to start a plan for this job.",
+            "Add a task below to start a plan for this job. The new task is saved on this job only.",
             "prep-empty",
+        )
+    else:
+        st.markdown(
+            "<p class='section-label'>Tasks</p>"
+            "<p class='hero-lead prep-task-note'>Each line is one stored task. "
+            "Checking it saves that status. Tasks you add can be deleted. Suggested tasks stay on the plan.</p>",
+            unsafe_allow_html=True,
         )
     for task in tasks:
         task_id = task["id"]
@@ -1922,13 +2102,23 @@ def _render_plan_notes(job_id: int, plan: dict) -> None:
     st.button("Save notes and next action", key=f"prep-save-{job_id}", on_click=_save_journal, args=(job_id,))
 
 
+def _match_sort_key(item: dict):
+    """Rank by the returned total. Jobs without an integer id stay in a stable later group."""
+    total = item.get("total_score")
+    score = float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else float("-inf")
+    job_id = (item.get("job") or {}).get("id")
+    order = job_id if isinstance(job_id, int) and not isinstance(job_id, bool) else 10**9
+    return (-score, order)
+
+
 def page_matches() -> None:
     """Explain one ranked job at a time. The numbers come from the match API."""
     page_header(
         "Match Insights",
-        "See how your skills and preferences align with one stored job at a time.",
+        "See why one ranked job matches your profile. The score is the total returned for that job.",
         "Ranking",
     )
+    st.markdown("<div class='match-page'></div>", unsafe_allow_html=True)
     if not require_profile():
         return
     if st.session_state.matches is None:
@@ -1960,11 +2150,13 @@ def page_matches() -> None:
                 "match-empty",
             )
         return
-    ordered = sorted(matches, key=lambda item: (-float(item["total_score"]), int(item["job"]["id"])))
-    labels = {
-        match["job"]["id"]: f"{match['job']['title']} · {match['job']['company']}"
-        for match in ordered
-    }
+    ordered = sorted(matches, key=_match_sort_key)
+    labels = {}
+    for match in ordered:
+        job = match.get("job") or {}
+        title = str(job.get("title") or "Untitled role")
+        company = str(job.get("company") or "Company not provided")
+        labels[job.get("id")] = f"{title} · {company}"
     options = list(labels)
     if st.session_state.get("match_choice") not in labels:
         preferred = st.session_state.get("selected_match_id")
@@ -1972,38 +2164,15 @@ def page_matches() -> None:
     with st.container(border=True):
         st.markdown("<p class='section-label match-controls'>Choose a job</p>", unsafe_allow_html=True)
         chosen_id = st.selectbox("Job", options, format_func=lambda job_id: labels[job_id], key="match_choice")
-    match = next(item for item in ordered if item["job"]["id"] == chosen_id)
-    total = match["total_score"]
-    st.markdown(
-        (
-            "<p class='section-label'>Overall match</p>"
-            f"<p class='score-hero'>{html.escape(format_score(total))}</p>"
-            f"<p class='hero-lead'>{html.escape(match_quality(total))}</p>"
-        ),
-        unsafe_allow_html=True,
-    )
+    match = next(item for item in ordered if (item.get("job") or {}).get("id") == chosen_id)
     render_match_card(match)
-    missing = [skill for skill in (match.get("missing_skills") or []) if str(skill).strip()]
-    with st.container(border=True):
-        st.markdown("<p class='section-label'>What is still open</p>", unsafe_allow_html=True)
-        if missing:
-            names = ", ".join(html.escape(str(skill)) for skill in missing)
-            st.markdown(
-                f"<p class='hero-lead'>These required skills are not matched yet: {names}.</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                "<p class='hero-lead'>Every listed required skill is matched.</p>",
-                unsafe_allow_html=True,
-            )
 
 
 def page_saved() -> None:
     """List the jobs this profile has saved. Removal is not offered by the API."""
     page_header(
         "Saved Jobs",
-        "Listings you saved, so you can come back to them later.",
+        "A personal collection of opportunities you chose to keep. Open one for the listing and your preparation notes.",
         "Library",
     )
     st.markdown("<div class='saved-page discover-page'></div>", unsafe_allow_html=True)
@@ -2024,20 +2193,19 @@ def page_saved() -> None:
         with st.container(border=True):
             empty_state(
                 "Nothing saved yet",
-                "Jobs you save will appear here.",
+                "Jobs you save from Discover Jobs stay in this collection. From here you can open the listing and your preparation notes.",
                 "saved-empty",
             )
             st.button("Discover Jobs", on_click=select_page, args=("Discover Jobs",), type="primary")
         return
     if not saved_jobs:
         return
-    noun = "job" if len(saved_jobs) == 1 else "jobs"
     st.markdown(
-        f"<p class='status-line'>{len(saved_jobs)} saved {noun}.</p>",
+        f"<p class='saved-summary-line'>{html.escape(_saved_collection_line(saved_jobs))}</p>",
         unsafe_allow_html=True,
     )
     with st.container(border=True):
-        st.markdown("<p class='section-label saved-controls'>Find a saved role</p>", unsafe_allow_html=True)
+        st.markdown("<p class='section-label saved-controls'>Search this collection</p>", unsafe_allow_html=True)
         search_col, sort_col = st.columns([2, 1], gap="large")
         with search_col:
             query = st.text_input("Search saved jobs", placeholder="Title, company, location, or skill")
@@ -2074,7 +2242,12 @@ def _render_saved_grid(items: list[dict], ranked: dict) -> None:
             for column, item in zip(columns, batch):
                 job = item.get("job") or {}
                 with column:
-                    render_saved_card(item, ranked.get(job.get("id")), on_open=_select_job)
+                    render_saved_card(
+                        item,
+                        ranked.get(job.get("id")),
+                        on_open=_select_job,
+                        on_match=_open_match,
+                    )
 
 
 def _filter_matches(matches: list[dict], query: str) -> list[dict]:
@@ -2109,6 +2282,32 @@ def _sort_matches(matches: list[dict], sort_by: str) -> list[dict]:
     if sort_by == "Skill score":
         return sorted(matches, key=lambda item: (-float(item["skill_score"]), item["job"]["id"]))
     return sorted(matches, key=lambda item: (-float(item["total_score"]), item["job"]["id"]))
+
+
+def _saved_collection_line(saved_jobs: list[dict]) -> str:
+    """Counts from the list already loaded. Match figures appear only after a ranking exists."""
+    count = len(saved_jobs)
+    noun = "saved job" if count == 1 else "saved jobs"
+    parts = [f"{count} {noun}"]
+    matches = st.session_state.get("matches")
+    unmatchable = sum(1 for item in saved_jobs if job_is_unmatchable(item.get("job") or {}))
+    if isinstance(matches, list):
+        ranked = matches_by_job(matches)
+        scored = 0
+        for item in saved_jobs:
+            job = item.get("job") or {}
+            found = ranked.get(job.get("id"))
+            if job_is_unmatchable(job):
+                continue
+            if isinstance(found, dict) and found.get("total_score") is not None:
+                scored += 1
+        parts.append(f"{scored} with a match score")
+        waiting = count - scored - unmatchable
+        if waiting:
+            parts.append(f"{waiting} not ranked yet")
+    if unmatchable:
+        parts.append(f"{unmatchable} without a match score")
+    return " · ".join(parts)
 
 
 def _sort_saved(saved_jobs: list[dict], sort_by: str) -> list[dict]:

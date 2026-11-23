@@ -200,12 +200,18 @@ def test_dashboard_cards_charts_and_lists_use_the_mocked_api():
         assert any(button.label == "Discover Jobs" for button in app.button)
         assert any(button.label == "Match Insights" for button in app.button)
         assert any(button.label == "My Profile" for button in app.button)
+        assert any(button.label == "Saved Jobs" for button in app.button)
+        assert any(button.label == "Resume Centre" for button in app.button)
+        assert "Every opportunity you explore" not in text
+        assert _kpi(text, "Profile completion") == "33%"
         assert not any(method == "POST" for method, _, _ in calls)
         assert sum(url.endswith("/matches") for _, url, _ in calls) == 1
         app.run()
         assert sum(url.endswith("/matches") for _, url, _ in calls) == 1
         assert sum(url.endswith("/jobs/") for _, url, _ in calls) == 1
         assert sum(url.endswith("/saved-jobs") for _, url, _ in calls) == 1
+        next(button for button in app.button if button.key == "home-open-resume").click().run()
+        assert app.session_state["nav"] == "Resume Centre"
 
 
 def test_empty_dashboard_explains_the_blank_figures():
@@ -215,6 +221,7 @@ def test_empty_dashboard_explains_the_blank_figures():
         assert _kpi(text, "Jobs matched") == "0"
         assert _kpi(text, "Saved jobs") == "0"
         assert _kpi(text, "Average match score") == "—"
+        assert _kpi(text, "Profile completion") == "33%"
         assert "No jobs have been scored yet." in text
         assert "You have not saved any jobs yet." in text
         assert "<span class='column-value'>" not in text

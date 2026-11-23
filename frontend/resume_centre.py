@@ -6,32 +6,40 @@ import html
 import streamlit as st
 
 from auth_session import authed_request, authed_upload
-from components import chips, empty_state, page_header, require_profile
+from components import chips, empty_state, page_header, select_page
 
 MAX_RESUME_BYTES = 5 * 1024 * 1024
-
-_PRIVACY = (
-    "The original PDF is not saved. Extracted text is kept only in this signed-in session "
-    "and is removed when you clear it or log out. The full resume is not sent to an external AI service."
-)
+_UPLOAD_LIMIT_MB = 5
 
 
 def page_resume() -> None:
-    """A guided resume check and one-job comparison. The PDF is not stored."""
+    """A resume check and one-job comparison. The PDF is not stored."""
     page_header(
         "Resume Centre",
-        "Make your resume stronger and discover how well it fits the jobs you're interested in.",
-        "Resume",
+        "Review your resume or compare it with a job opportunity.",
     )
     st.markdown("<div class='resume-page'></div>", unsafe_allow_html=True)
-    if not require_profile():
+    if not _resume_gate():
         return
-    st.markdown(f"<p class='hero-lead resume-privacy'>{html.escape(_PRIVACY)}</p>", unsafe_allow_html=True)
+    st.markdown(
+        (
+            "<p class='hero-lead resume-privacy'>Your original PDF isn't stored. "
+            "Extracted text remains in your signed-in session and is cleared on logout.</p>"
+        ),
+        unsafe_allow_html=True,
+    )
+    with st.expander("Privacy details"):
+        st.markdown(
+            "The full resume is not sent to an external AI service. "
+            "The original PDF is not saved. Extracted text stays in this signed-in session "
+            "until you clear it or log out."
+        )
     choice = st.radio(
         "Choose a step",
         ["Check My Resume", "Match My Resume to a Job"],
         horizontal=True,
         key="resume-section",
+        label_visibility="collapsed",
     )
     if choice == "Match My Resume to a Job":
         _render_match()
@@ -39,8 +47,18 @@ def page_resume() -> None:
         _render_health()
 
 
-def _show_check() -> None:
-    st.session_state["resume-section"] = "Check My Resume"
+def _resume_gate() -> bool:
+    """Open the page for this signed-in profile without repeating the sidebar name."""
+    if st.session_state.candidate_id is None:
+        with st.container(border=True):
+            empty_state(
+                "Profile needed",
+                "Save a profile on My Profile first. Match Insights and Saved Jobs stay closed until then.",
+                "gate-card",
+            )
+            st.button("Go to My Profile", on_click=select_page, args=("My Profile",), type="primary")
+        return False
+    return True
 
 
 def clear_resume() -> None:
@@ -48,45 +66,68 @@ def clear_resume() -> None:
     from auth_session import _clear_resume_state
 
     _clear_resume_state()
+    st.session_state.resume_notice = None
 
 
 def _render_health() -> None:
-    st.markdown(
-        (
-            "<p class='section-label resume-heading'>Step 1 — Upload your resume</p>"
-            "<p class='hero-lead'>Upload your resume as a PDF. We'll review its content and suggest practical improvements.</p>"
-        ),
-        unsafe_allow_html=True,
-    )
+    resume = _render_upload()
+    if resume is None:
+        empty_state(
+            "No resume uploaded",
+            "Upload a text-based PDF to start the health check.",
+            "resume-empty",
+        )
+        return
+    _render_file_status(resume)
+    health = resume.get("health") if isinstance(resume.get("health"), dict) else None
+    if health is None:
+        st.warning("Upload the resume again to calculate the health check.")
+        return
+    _render_health_summary(health)
+    _render_improvement_checklist(health)
+
+
+def _render_upload() -> dict | None:
+    """Show the PDF control. A file is kept only after the existing checks succeed."""
     with st.container(border=True):
+        st.markdown(
+            (
+                "<p class='section-label resume-heading'>Upload your resume</p>"
+                "<p class='hero-lead resume-limit'>Text-based PDF only, up to 5 MB.</p>"
+            ),
+            unsafe_allow_html=True,
+        )
         uploaded = st.file_uploader(
             "PDF resume",
             type=["pdf"],
+            max_upload_size=_UPLOAD_LIMIT_MB,
             key=f"resume-file-{st.session_state.get('resume_uploader', 0)}",
             help="PDF only, up to 5 MB. The file itself is not stored.",
         )
+        if uploaded is not None:
+            size = uploaded.size if isinstance(getattr(uploaded, "size", None), int) else len(uploaded.getvalue())
+            st.markdown(
+                (
+                    "<p class='hero-lead resume-file-selected'>Selected file: "
+                    f"{html.escape(str(uploaded.name))} · {size} bytes.</p>"
+                ),
+                unsafe_allow_html=True,
+            )
         _accept_upload(uploaded)
         resume = st.session_state.get("resume")
-        if isinstance(resume, dict):
-            st.caption("Upload another PDF to replace this resume.")
-        st.button("Clear resume", key="resume-clear", on_click=clear_resume)
+        notice = st.session_state.get("resume_notice")
+        if isinstance(resume, dict) and notice:
+            st.success(notice)
         error = st.session_state.get("resume_error")
         if error:
             st.error(error)
-        if not isinstance(resume, dict):
-            empty_state(
-                "No resume uploaded",
-                "Upload a text-based PDF to start the health check.",
-                "resume-empty",
-            )
-            return
-        _render_file_status(resume)
-        health = resume.get("health") if isinstance(resume.get("health"), dict) else None
-        if health is None:
-            st.warning("Upload the resume again to calculate the health check.")
-            return
-        _render_health_summary(health)
-        _render_improvement_checklist(health)
+        if isinstance(resume, dict):
+            st.caption("Upload another PDF to replace this resume.")
+        st.button("Clear resume", key="resume-clear", on_click=clear_resume)
+    resume = st.session_state.get("resume")
+    if isinstance(resume, dict) and resume.get("text"):
+        return resume
+    return None
 
 
 def _accept_upload(uploaded) -> None:
@@ -108,12 +149,14 @@ def _accept_upload(uploaded) -> None:
     st.session_state.resume = None
     st.session_state.resume_match = None
     st.session_state.resume_signature = signature
+    st.session_state.resume_notice = None
     _clear_improvement_checks()
-    body, error = authed_upload(
-        f"/candidates/{st.session_state.candidate_id}/resume/extract",
-        name,
-        data,
-    )
+    with st.spinner("Reading the PDF."):
+        body, error = authed_upload(
+            f"/candidates/{st.session_state.candidate_id}/resume/extract",
+            name,
+            data,
+        )
     if error:
         st.session_state.resume_error = error
         return
@@ -121,6 +164,7 @@ def _accept_upload(uploaded) -> None:
         st.session_state.resume_error = "Text could not be extracted from that PDF."
         return
     st.session_state.resume_error = None
+    st.session_state.resume_notice = "The PDF was read for this session. The original file was not stored."
     st.session_state.resume = {
         "filename": body.get("filename") or name,
         "message": body.get("message") or "Text extracted.",
@@ -136,6 +180,7 @@ def _reject_upload(data: bytes, message: str) -> None:
     st.session_state.resume_match = None
     st.session_state.resume_signature = hashlib.sha256(data).hexdigest()
     st.session_state.resume_error = message
+    st.session_state.resume_notice = None
     _clear_improvement_checks()
 
 
@@ -165,24 +210,25 @@ def _render_file_status(resume: dict) -> None:
 
 def _render_health_summary(health: dict) -> None:
     label, tone = _health_label(health.get("score"))
-    st.markdown(
-        (
-            "<p class='section-label'>Resume health</p>"
-            f"<p class='resume-health-label resume-health-{tone}'>{html.escape(label)}</p>"
-            "<p class='hero-lead resume-note'>This is a checklist in this application. "
-            "It does not mean the resume will pass every applicant tracking system.</p>"
-        ),
-        unsafe_allow_html=True,
-    )
-    _render_review_groups(health)
-    with st.expander("How is resume health calculated?"):
-        score = health.get("score")
-        passed = health.get("passed")
-        total = health.get("total")
+    score = health.get("score")
+    passed = health.get("passed")
+    total = health.get("total")
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<p class='section-label'>Resume health</p>"
+                f"<p class='resume-health-label resume-health-{tone}'>{html.escape(label)}</p>"
+                "<p class='hero-lead resume-note'>Checklist completion only. "
+                "It does not mean the resume will pass every applicant tracking system.</p>"
+            ),
+            unsafe_allow_html=True,
+        )
         if isinstance(score, int):
             st.markdown(f"<p class='resume-percent'>{score}%</p>", unsafe_allow_html=True)
         if isinstance(passed, int) and isinstance(total, int):
             st.markdown(f"{passed} of {total} checks passed")
+    _render_review_groups(health)
+    with st.expander("How is resume health calculated?"):
         st.markdown(html.escape(str(health.get("formula") or "The checklist explanation was not returned.")))
 
 
@@ -211,16 +257,24 @@ _FRIENDLY_CHECKS = {
 
 def _render_review_groups(health: dict) -> None:
     checks = [check for check in health.get("checks") or [] if isinstance(check, dict)]
-    present = [check for check in checks if check.get("status") == "found"]
-    improve = [check for check in checks if check.get("status") != "found"]
-    _review_group("Present in your resume", present, "found", "Nothing was detected in this resume yet.")
-    _review_group(
-        "Could be improved",
-        improve,
-        "missing",
-        "Nothing here needs a change from the checks we ran.",
-    )
-    _bullet_section("Suggestions", health.get("suggestions"))
+    if not checks:
+        st.markdown(
+            "<p class='hero-lead'>No checklist items were returned.</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        present = [check for check in checks if check.get("status") == "found"]
+        improve = [check for check in checks if check.get("status") != "found"]
+        if present:
+            with st.container(border=True):
+                _review_group("Present in your resume", present, "found", "")
+        if improve:
+            with st.container(border=True):
+                _review_group("Could be improved", improve, "missing", "")
+    suggestions = [str(item) for item in health.get("suggestions") or [] if str(item).strip()]
+    if suggestions:
+        with st.container(border=True):
+            _bullet_section("Recommendations", suggestions)
 
 
 def _review_group(title: str, checks: list[dict], kind: str, empty: str) -> None:
@@ -295,16 +349,15 @@ def _render_improvement_checklist(health: dict) -> None:
 
 
 def _render_match() -> None:
-    st.markdown("<p class='section-label resume-heading'>Match My Resume to a Job</p>", unsafe_allow_html=True)
-    st.button("Back to my resume", key="resume-back", on_click=_show_check)
     resume = st.session_state.get("resume")
     if not isinstance(resume, dict) or not resume.get("text"):
-        with st.container(border=True):
-            empty_state(
-                "Upload a resume first",
-                "Job comparison uses the text extracted from your PDF.",
-                "resume-match-empty",
-            )
+        resume = _render_upload()
+    if not isinstance(resume, dict) or not resume.get("text"):
+        empty_state(
+            "Upload a resume first",
+            "Job comparison uses the text extracted from your PDF.",
+            "resume-match-empty",
+        )
         return
     error = _load_jobs()
     jobs = st.session_state.get("job_catalog")
@@ -321,11 +374,11 @@ def _render_match() -> None:
         return
     labels, by_label = _job_choices(jobs)
     with st.container(border=True):
-        st.markdown("<p class='section-label'>Step 1 — Select a job</p>", unsafe_allow_html=True)
+        st.markdown("<p class='section-label'>Selected job</p>", unsafe_allow_html=True)
         choice = st.selectbox("Job", labels, key="resume-job")
         selected = by_label[choice]
         _show_selected_job(selected)
-        st.markdown("<p class='section-label'>Step 2 — Analyze my resume</p>", unsafe_allow_html=True)
+        _render_relevant_skills(selected.get("required_skills"))
         if st.button("Analyze Resume for This Job", type="primary"):
             with st.spinner("Reading your resume against this job."):
                 _compare(selected, str(resume.get("text") or ""))
@@ -386,74 +439,141 @@ def _compare(job: dict, text: str) -> None:
     st.session_state.resume_match = body
 
 
+def _skill_names(values) -> list[str]:
+    return [str(skill) for skill in values or [] if str(skill).strip()]
+
+
+def _render_relevant_skills(values) -> None:
+    names = _skill_names(values)
+    if not names:
+        return
+    st.markdown("<p class='section-label'>Relevant skills</p>", unsafe_allow_html=True)
+    st.markdown(f"<p class='hero-lead'>{html.escape(', '.join(names))}</p>", unsafe_allow_html=True)
+
+
 def _render_match_result(match: dict) -> None:
     percent = match.get("coverage_percent")
     percent_text = "—" if not isinstance(percent, int) else f"{percent}%"
-    st.markdown("<p class='section-label'>Step 3 — Results for this job</p>", unsafe_allow_html=True)
-    _show_selected_job(match)
-    st.markdown(
-        (
-            "<p class='section-label'>Required Skill Coverage</p>"
-            f"<p class='resume-percent resume-metric-value'>{html.escape(percent_text)}</p>"
-            "<p class='hero-lead'>This percentage shows how many of the job's required skills we identified "
-            "in your resume. It does not guarantee interview selection.</p>"
-        ),
-        unsafe_allow_html=True,
-    )
-    st.markdown("<p class='section-label'>Your Matching Skills</p>", unsafe_allow_html=True)
-    chips([str(skill) for skill in match.get("found_skills") or []], "exact")
-    st.markdown("<p class='section-label'>Skills to Work On</p>", unsafe_allow_html=True)
-    chips([str(skill) for skill in match.get("missing_skills") or []], "missing")
-    st.caption("These required skills were not found in the resume. Add one only if you have used it.")
+    found = _skill_names(match.get("found_skills"))
+    missing = _skill_names(match.get("missing_skills"))
     with st.container(border=True):
-        _bullet_section("Your Strengths", match.get("strengths"))
-    with st.container(border=True):
-        _bullet_section("How to Improve", match.get("suggestions"))
-    gaps = match.get("gaps") if isinstance(match.get("gaps"), list) else []
+        _show_selected_job(match)
+        count_line = ""
+        if isinstance(match.get("found_count"), int) and isinstance(match.get("required_count"), int):
+            count_line = (
+                f"<p class='hero-lead'>{match['found_count']} of {match['required_count']} "
+                "required skills were found by exact wording.</p>"
+            )
+        st.markdown(
+            (
+                "<p class='section-label'>Required Skill Coverage</p>"
+                f"<p class='resume-percent resume-metric-value'>{html.escape(percent_text)}</p>"
+                "<p class='hero-lead resume-note'>Exact wording only. "
+                "It does not guarantee interview selection. "
+                "It is not an applicant tracking score.</p>"
+                f"{count_line}"
+            ),
+            unsafe_allow_html=True,
+        )
+    if found or missing or _related_rows(match.get("related_skills")):
+        with st.container(border=True):
+            if found:
+                st.markdown("<p class='section-label'>Exact matches</p>", unsafe_allow_html=True)
+                chips(found, "exact")
+            _render_related_skills(match.get("related_skills"))
+            if missing:
+                st.markdown("<p class='section-label'>Missing skills</p>", unsafe_allow_html=True)
+                chips(missing, "missing")
+    else:
+        st.markdown(
+            "<p class='hero-lead'>No required-skill comparison was returned.</p>",
+            unsafe_allow_html=True,
+        )
+    strengths = [str(item) for item in match.get("strengths") or [] if str(item).strip()]
+    suggestions = [str(item) for item in match.get("suggestions") or [] if str(item).strip()]
+    if strengths:
+        with st.container(border=True):
+            _bullet_section("Your Strengths", strengths)
+    if suggestions:
+        with st.container(border=True):
+            _bullet_section("How to Improve", suggestions)
+    gaps = [str(item) for item in match.get("gaps") or [] if str(item).strip()]
     if gaps:
         with st.expander("Why these skills are listed"):
             _bullet_section("Details", gaps)
+    _render_match_notes(match)
+
+
+def _related_rows(related) -> list[dict]:
+    rows = []
+    for item in related or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("resume_skill") or "").strip() and str(item.get("required_skill") or "").strip():
+            rows.append(item)
+    return rows
+
+
+def _render_related_skills(related) -> None:
+    rows = _related_rows(related)
+    if not rows:
+        return
+    st.markdown("<p class='section-label'>Related skills</p>", unsafe_allow_html=True)
+    for item in rows:
+        resume_skill = html.escape(str(item.get("resume_skill") or ""))
+        required_skill = html.escape(str(item.get("required_skill") or ""))
+        st.markdown(
+            (
+                "<p class='hero-lead resume-related'>"
+                f"<span class='chip chip-semantic'>{resume_skill}</span> "
+                f"is related to {required_skill}. "
+                "This is not counted as the required skill."
+                "</p>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_match_notes(match: dict) -> None:
+    keywords_found = _skill_names(match.get("keywords_found"))
+    keywords_missing = _skill_names(match.get("keywords_missing"))
+    experience = match.get("min_experience")
+    formula = str(match.get("formula") or "").strip()
+    has_notes = bool(keywords_found or keywords_missing or isinstance(experience, int) or formula or "semantic_used" in match)
+    if not has_notes:
+        return
     with st.expander("More about this comparison"):
-        related = match.get("related_skills") if isinstance(match.get("related_skills"), list) else []
-        if related:
-            for item in related:
-                if not isinstance(item, dict):
-                    continue
-                st.markdown(
-                    (
-                        "<p class='hero-lead'>"
-                        f"{html.escape(str(item.get('resume_skill') or ''))} is related to "
-                        f"{html.escape(str(item.get('required_skill') or ''))}. "
-                        "This is not counted as the required skill."
-                        "</p>"
-                    ),
-                    unsafe_allow_html=True,
-                )
-        st.markdown("<p class='section-label'>Words from the job description found in the resume</p>", unsafe_allow_html=True)
-        chips([str(word) for word in match.get("keywords_found") or []], "exact")
-        st.markdown("<p class='section-label'>Job words not found</p>", unsafe_allow_html=True)
-        chips([str(word) for word in match.get("keywords_missing") or []], "missing")
-        experience = match.get("min_experience")
+        if keywords_found:
+            st.markdown("<p class='section-label'>Words from the job description found in the resume</p>", unsafe_allow_html=True)
+            chips(keywords_found, "exact")
+        if keywords_missing:
+            st.markdown("<p class='section-label'>Job words not found</p>", unsafe_allow_html=True)
+            chips(keywords_missing, "missing")
         if isinstance(experience, int):
             st.markdown(
                 f"<p class='hero-lead'>This job lists a minimum of {experience} years. "
                 "That figure is not treated as something the resume proved.</p>",
                 unsafe_allow_html=True,
             )
-        note = (
-            "Related wording was compared using skill names only and is not part of the percentage."
-            if match.get("semantic_used")
-            else "The percentage uses exact wording only."
-        )
-        st.markdown(f"<p class='hero-lead'>{html.escape(note)}</p>", unsafe_allow_html=True)
-        st.markdown(html.escape(str(match.get("formula") or "The coverage explanation was not returned.")))
+        if "semantic_used" in match:
+            note = (
+                "Related wording was compared using skill names only and is not part of the percentage."
+                if match.get("semantic_used")
+                else "The percentage uses exact wording only."
+            )
+            st.markdown(f"<p class='hero-lead'>{html.escape(note)}</p>", unsafe_allow_html=True)
+        if formula:
+            st.markdown(html.escape(formula))
+        elif "formula" in match:
+            st.markdown("The coverage explanation was not returned.")
 
 
 def _bullet_section(title: str, items) -> None:
     rows = [str(item) for item in items or [] if str(item).strip()]
+    if not rows:
+        return
     body = "".join(f"<li>{html.escape(item)}</li>" for item in rows)
-    content = f"<ul class='resume-list'>{body}</ul>" if body else "<p class='hero-lead'>None identified from the text.</p>"
     st.markdown(
-        f"<p class='section-label'>{html.escape(title)}</p>{content}",
+        f"<p class='section-label'>{html.escape(title)}</p><ul class='resume-list'>{body}</ul>",
         unsafe_allow_html=True,
     )

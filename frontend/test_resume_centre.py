@@ -113,6 +113,8 @@ def _resume_app(**state):
                 return StatusResponse({"detail": state["match_error"]}, 422)
             assert kwargs["json"]["text"] == RESUME_TEXT
             assert kwargs["json"]["job_id"] == 11
+            if state.get("match_payload") is not None:
+                return StatusResponse(state["match_payload"])
             return StatusResponse(match_resume_to_job(RESUME_TEXT, type("Job", (), JOB)))
         raise AssertionError(f"Unexpected API call {method} {url}")
 
@@ -130,7 +132,7 @@ def _resume_app(**state):
         app.session_state["candidate_name"] = "Ada Lovelace"
         app.session_state["profile"] = PROFILE
         for key, value in state.items():
-            if key not in {"jobs", "jobs_fail", "extract_error", "match_error"}:
+            if key not in {"jobs", "jobs_fail", "extract_error", "match_error", "match_payload"}:
                 app.session_state[key] = value
         app.run()
         assert not app.exception, app.exception
@@ -140,11 +142,14 @@ def _resume_app(**state):
 def test_empty_resume_page_explains_privacy_and_does_not_invent_a_score():
     with _resume_app() as (app, calls):
         text = _markdown(app)
-        assert "Make your resume stronger" in text
-        assert "The original PDF is not saved." in text
-        assert "Step 1 — Upload your resume" in text
+        assert "Review your resume or compare it with a job opportunity." in text
+        assert "Your original PDF isn't stored." in text
+        assert "The full resume is not sent to an external AI service." in text
+        assert "Signed in as" not in text
+        assert "Step 1 — Upload your resume" not in text
         assert "<p class='section-label resume-empty'>No resume uploaded</p>" in text
         assert "<p class='resume-percent'>" not in text
+        assert app.file_uploader[0].proto.max_upload_size_mb == 5
         assert not any(call[0] == "POST" for call in calls)
         _labeled(app.radio, "Choose a step").set_value("Match My Resume to a Job").run()
         assert "<p class='section-label resume-match-empty'>Upload a resume first</p>" in _markdown(app)
@@ -196,12 +201,44 @@ def test_job_match_shows_coverage_and_does_not_treat_a_missing_skill_as_possesse
         assert "<p class='resume-percent resume-metric-value'>67%</p>" in text
         assert "Required Skill Coverage" in text
         assert "does not guarantee interview selection" in text
+        assert "Relevant skills" in text
+        assert "Exact matches" in text
+        assert "Missing skills" in text
         assert "chip-exact" in text and "Python" in text
         assert "chip-missing" in text and "Tableau" in text
         assert "Do not add Tableau" in text
         assert "The resume text includes Python." in text
         assert EMAIL not in text
         assert "total_score" not in text
+
+    related_payload = {
+        "job_id": 11,
+        "title": "Data Analyst",
+        "company": "Northwind",
+        "location": "Remote",
+        "coverage_percent": 67,
+        "found_count": 2,
+        "required_count": 3,
+        "found_skills": ["Python", "SQL"],
+        "missing_skills": ["Tableau"],
+        "related_skills": [
+            {"resume_skill": "Data visualization", "required_skill": "Tableau", "similarity": 0.81}
+        ],
+        "strengths": ["The resume text includes Python."],
+        "suggestions": [],
+        "gaps": ["Do not add Tableau unless your own experience supports it."],
+    }
+    with _resume_app(
+        resume={"filename": "synthetic.pdf", "text": RESUME_TEXT, "health": HEALTH},
+        job_catalog=[JOB],
+        match_payload=related_payload,
+    ) as (related, _calls):
+        _labeled(related.radio, "Choose a step").set_value("Match My Resume to a Job").run()
+        _labeled(related.button, "Analyze Resume for This Job").click().run()
+        related_text = _markdown(related)
+        assert "class='chip chip-semantic'>Data visualization" in related_text
+        assert "is related to Tableau." in related_text
+        assert "This is not counted as the required skill." in related_text
 
     with _resume_app(
         resume={"filename": "synthetic.pdf", "text": RESUME_TEXT, "health": HEALTH},
@@ -248,3 +285,98 @@ def test_logout_and_login_clear_the_session_resume():
         _labeled(login.button, "Log in").click().run()
         assert login.session_state["auth_token"] == "issued-token"
         assert login.session_state["resume"] is None
+        assert login.session_state["resume_notice"] is None
+
+
+def test_invalid_and_oversized_pdfs_are_rejected_before_upload():
+    with _resume_app() as (app, calls):
+        assert app.file_uploader[0].allowed_type == [".pdf"]
+        app.file_uploader[0].set_value(("notes.pdf", b"not a pdf", "application/pdf")).run()
+        assert any("not a PDF" in item.value for item in app.error)
+        assert app.session_state["resume"] is None
+        assert app.session_state["resume_notice"] is None
+        assert any(url.endswith("/resume/extract") for _, url, _, _ in calls)
+
+    with _resume_app() as (large, calls):
+        payload = b"%PDF" + b"x" * ((5 * 1024 * 1024) - 3)
+        large.file_uploader[0].set_value(("large.pdf", payload, "application/pdf")).run()
+        assert any("5 MB" in item.value for item in large.error)
+        assert large.session_state["resume"] is None
+        assert large.session_state["resume_notice"] is None
+        assert not any(url.endswith("/resume/extract") for _, url, _, _ in calls)
+        assert "Selected file: large.pdf" in _markdown(large)
+
+
+def test_extract_failure_does_not_confirm_an_upload():
+    with _resume_app(extract_error="This PDF could not be read. It may be corrupted.") as (app, calls):
+        app.file_uploader[0].set_value(("broken.pdf", b"%PDF-1.4 broken", "application/pdf")).run()
+        assert app.session_state["resume"] is None
+        assert any("could not be read" in item.value for item in app.error)
+        assert not any(getattr(item, "value", "") == "The PDF was read for this session. The original file was not stored." for item in app.success)
+        assert any(url.endswith("/resume/extract") for _, url, _, _ in calls)
+
+
+def test_missing_report_fields_do_not_invent_scores_or_skills():
+    sparse = {
+        "filename": "synthetic.pdf",
+        "message": "Text extracted.",
+        "text": RESUME_TEXT,
+        "page_count": 1,
+        "character_count": 40,
+        "health": {"formula": "The checklist explanation was not returned."},
+    }
+    with _resume_app(resume=sparse) as (app, _calls):
+        text = _markdown(app)
+        assert "Health check unavailable" in text
+        assert "<p class='resume-percent'>" not in text
+        assert "No checklist items were returned." in text
+        assert "My Resume Improvement Checklist" in text
+        assert "No improvement items came from this resume." in text
+        assert EMAIL not in text
+
+    payload = {
+        "job_id": 11,
+        "title": "Data Analyst",
+        "company": "Northwind",
+        "location": "Remote",
+        "coverage_percent": None,
+        "found_skills": [],
+        "missing_skills": [],
+        "related_skills": [],
+        "strengths": [],
+        "suggestions": [],
+        "gaps": [],
+        "keywords_found": [],
+        "keywords_missing": [],
+    }
+    with _resume_app(
+        resume={"filename": "synthetic.pdf", "text": RESUME_TEXT, "health": HEALTH},
+        job_catalog=[JOB],
+        match_payload=payload,
+    ) as (matched, _calls):
+        _labeled(matched.radio, "Choose a step").set_value("Match My Resume to a Job").run()
+        _labeled(matched.button, "Analyze Resume for This Job").click().run()
+        text = _markdown(matched)
+        assert "<p class='resume-percent resume-metric-value'>—</p>" in text
+        assert "No required-skill comparison was returned." in text
+        assert "Your Strengths" not in text
+        assert "How to Improve" not in text
+        assert 'class="chip chip-exact"' not in text
+        assert "Exact matches" not in text
+        assert "Missing skills" not in text
+        assert EMAIL not in text
+        assert "applicant tracking score" in text
+
+
+def test_resume_centre_styles_follow_the_shared_tokens():
+    css = (FRONTEND_DIR / "theme.py").read_text(encoding="utf-8")
+    assert "resume-page" in css
+    assert "background: var(--surface)" in css
+    assert "color: var(--ink)" in css
+    assert "color: var(--text-secondary)" in css
+    assert "var(--resume-found-bg)" in css
+    assert "#6D62C8" not in css
+    assert "#F4F2FB" not in css
+    source = (FRONTEND_DIR / "resume_centre.py").read_text(encoding="utf-8")
+    assert "resume[\"text\"]" not in source
+    assert "st.write(resume" not in source

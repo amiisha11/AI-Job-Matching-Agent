@@ -264,6 +264,8 @@ def test_discover_filters_details_score_and_save_use_the_catalog():
     with _discover(matches=MATCHES) as (app, calls):
         text = _markdown(app)
         assert "2 listings match." in text
+        assert "Stored catalogue results." in text
+        assert "Filters: Country: Worldwide" in text
         assert "Data Analyst" in text
         assert "Match 82" in text
         assert "Not ranked yet" in text
@@ -315,15 +317,14 @@ def test_discover_empty_catalog_and_failed_request():
 def test_job_cards_keep_a_short_square_layout():
     from theme import CSS
 
-    assert "repeat(3, minmax(0, 1fr))" in CSS
-    assert "@media (max-width: 1100px)" in CSS
     assert "repeat(2, minmax(0, 1fr))" in CSS
     assert "@media (max-width: 680px)" in CSS
     assert "grid-template-columns: minmax(0, 1fr)" in CSS
     assert "@media (max-width: 390px)" in CSS
     source = Path(__file__).resolve().parents[0].joinpath("pages.py").read_text(encoding="utf-8")
     assert "st.columns(len(jobs)" not in source
-    assert "st.columns(3, gap=\"medium\")" in source
+    assert "for start in range(0, len(jobs), 2)" in source
+    assert "st.columns(2, gap=\"medium\")" in source
     long_title = "Principal Applied Machine Learning Engineer for Customer Platforms and Research"
     long_job = {
         "id": 9,
@@ -387,6 +388,11 @@ def test_preparation_journal_is_saved_per_job():
         next(button for button in app.button if button.key == "detail-7").click().run()
         opened = _markdown(app)
         assert "My Preparation Plan" in opened
+        assert "<p class='match-title prep-job'>Data Analyst</p>" in opened
+        assert "<p class='match-company prep-job'>Northwind · Remote</p>" in opened
+        assert "Source:" not in opened
+        assert "Due" not in opened
+        assert "Priority" not in opened
         assert "What's Next?" in opened
         assert "0 / 2 tasks" in opened
         assert any(box.label == "Read the complete job description for job 7." for box in app.checkbox)
@@ -421,6 +427,11 @@ def test_preparation_journal_is_saved_per_job():
         assert _keyed(app.text_area, "prep-notes-8").value == ""
         assert sum(method == "GET" and url.endswith("/jobs/7/preparation") for method, url, _ in calls) == 1
         assert sum(method == "GET" and url.endswith("/jobs/8/preparation") for method, url, _ in calls) == 1
+
+        next(button for button in app.button if button.key == "prep-close").click().run()
+        assert app.session_state["selected_job_id"] is None
+        assert "My Preparation Plan" not in _markdown(app)
+        assert app.session_state["nav"] == "Discover Jobs"
 
 
 def test_preparation_empty_and_failed_states_do_not_invent_tasks():
@@ -457,6 +468,28 @@ def test_preparation_empty_and_failed_states_do_not_invent_tasks():
         assert "<p class='section-label auth-card'>Sign in</p>" in _markdown(app)
 
 
+def test_preparation_header_uses_the_selected_job_source():
+    sourced = {
+        "id": 7,
+        "title": "Data Analyst",
+        "company": "Northwind",
+        "location": "Manchester",
+        "source": "adzuna",
+        "source_country": "gb",
+        "description": "Analyze the stored sales records.",
+        "required_skills": ["SQL"],
+        "min_experience": 1,
+    }
+    with _discover(jobs=[sourced], saved=[]) as (app, _calls):
+        next(button for button in app.button if button.key == "detail-7").click().run()
+        text = _markdown(app)
+        assert "<p class='match-title prep-job'>Data Analyst</p>" in text
+        assert "<p class='match-company prep-job'>Northwind · Manchester</p>" in text
+        assert "<p class='detail-line prep-source'>Source: Adzuna</p>" in text
+        assert app.session_state["selected_job_id"] == 7
+        assert app.session_state["nav"] == "Discover Jobs"
+
+
 def test_discover_loads_cached_scores_from_the_matching_service():
     with _discover(matches=None, api_matches=MATCHES) as (app, calls):
         text = _markdown(app)
@@ -486,15 +519,14 @@ def test_external_listing_stays_visible_without_a_match_score():
     with _discover(jobs=[*JOBS, external], saved=[], matches=MATCHES) as (app, calls):
         text = _markdown(app)
         assert "Python Developer" in text
-        assert "Match score unavailable" in text
-        assert "This listing does not provide enough verified skill requirements for reliable matching." in text
+        assert "Match score unavailable — insufficient verified skill information." in text
+        assert "This listing does not provide enough verified skill requirements for reliable matching." not in text
         assert "Not ranked yet" in text
-        assert "Skills not provided by source" in text
-        assert "Experience requirement not specified" in text
-        assert "Salary not provided" in text
-        assert "Work arrangement not specified" in text
-        assert "Source: Adzuna" in text
-        assert "Country: India" in text
+        assert "Skills not provided by source" not in text
+        assert "Experience requirement not specified" not in text
+        assert "Salary not provided" not in text
+        assert "Work arrangement not specified" not in text
+        assert "London · India" in text
         assert "Posted: 2026-11-22 06:39" in text
         assert "None" not in text
         assert not any(getattr(item, "value", None) == "None" for item in app.caption)
@@ -514,6 +546,7 @@ def test_external_listing_stays_visible_without_a_match_score():
         detail = _markdown(app)
         assert "provider supplied a description snippet" in detail
         assert "Match score unavailable" in detail
+        assert "This listing does not provide enough verified skill requirements for reliable matching." in detail
         theme = Path(__file__).resolve().parent.joinpath("theme.py").read_text(encoding="utf-8")
         assert "min-width: 116px" in theme
         assert "min-height: 23px" in theme
@@ -578,7 +611,7 @@ def test_discover_filters_use_provider_categories_and_cache_them():
         text = _markdown(app)
         assert "Industry: IT Jobs" in text
         assert "Industry: Legal Jobs" in text
-        assert "Other / Not specified" in text
+        assert "Other / Not specified" in _labeled(app.selectbox, "Industry").options
         assert "Industry categories could not be loaded" not in text
         assert sum(url.endswith("/jobs/filters") for _, url, _ in calls) == 1
 
@@ -592,7 +625,7 @@ def test_discover_filters_use_provider_categories_and_cache_them():
         unspecified = _markdown(app)
         assert "Intern Analyst" in unspecified
         assert "Solicitor" not in unspecified
-        assert "Other / Not specified" in unspecified
+        assert "Industry: Other / Not specified" not in unspecified
 
         _labeled(app.selectbox, "Industry").set_value("all").run()
         _labeled(app.selectbox, "Country").set_value("gb").run()
@@ -627,7 +660,7 @@ def test_discover_filters_use_provider_categories_and_cache_them():
         _labeled(app.selectbox, "Experience").set_value("unspecified").run()
         unknown = _markdown(app)
         assert "Solicitor" in unknown
-        assert "Experience requirement not specified" in unknown
+        assert "Experience requirement not specified" not in unknown
         assert "Python Developer" not in unknown
 
         _labeled(app.selectbox, "Experience").set_value("any").run()
@@ -702,8 +735,10 @@ def test_jooble_live_results_stay_beside_the_catalog():
         assert "q=Engineer" in jooble_calls[0]
         assert "country=gb" not in jooble_calls[0]
         assert "Platform Engineer" in text
+        assert "1 live Jooble result" in text
+        assert "Live Jooble results are not saved." in text
         assert "Company not provided" in text
-        assert "Source: Jooble" in text
+        assert ">Jooble</a>" in text
         assert "Publisher: Example Board" in text
         assert "Salary: 900000 INR" in text
         assert "https://in.jooble.org/" in text
@@ -762,7 +797,7 @@ def test_empty_detail_filters_are_hidden_and_live_values_are_not_invented():
         assert "Work arrangement" not in labels
         assert "Experience" not in labels
         assert "Employment type: Full-time" in text
-        assert "Work arrangement not specified" in text
+        assert "Work arrangement not specified" not in text
 
 
 def test_detail_filters_ignore_missing_metadata():
@@ -798,7 +833,7 @@ def test_category_metadata_failure_is_separate_from_an_empty_search():
         text = _markdown(app)
         assert any("Categories are unavailable." in item.value for item in app.warning)
         assert "Data Analyst" in text
-        assert "Other / Not specified" in text
+        assert "Other / Not specified" in _labeled(app.selectbox, "Industry").options
         assert sum(url.endswith("/jobs/filters") for _, url, _ in calls) == 1
 
 

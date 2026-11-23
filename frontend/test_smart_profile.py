@@ -176,13 +176,13 @@ def test_builder_saves_industries_countries_and_keeps_existing_skills():
         assert first["preferred_roles"] == ["Data Analyst"]
         assert first["preferred_locations"] == ["London"]
 
-        _labeled(app.button, "Continue").click().run()
         assert "Ward Nurse" not in _markdown(app)
         assert "Patient care" in _labeled(app.multiselect, "Skills").options
+        _labeled(app.button, "Remove SQL").click().run()
+        assert _labeled(app.multiselect, "Skills").value == ["Python"]
         _labeled(app.button, "Remove selected skills").click().run()
         assert _labeled(app.multiselect, "Skills").value == []
         _labeled(app.multiselect, "Skills").select("Python").select("Patient care")
-        _labeled(app.button, "Continue").click().run()
         assert "Ward Nurse" in _labeled(app.multiselect, "Preferred roles").options
         assert "Legal Associate" in _labeled(app.multiselect, "Preferred roles").options
         _labeled(app.multiselect, "Preferred industries").select("it-jobs").select("legal-jobs")
@@ -190,13 +190,10 @@ def test_builder_saves_industries_countries_and_keeps_existing_skills():
         _labeled(app.button, "Add role").click().run()
         roles = _labeled(app.multiselect, "Preferred roles").value
         assert sum(item.casefold() == "ward nurse" for item in roles) == 1
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.multiselect, "Preferred countries").select("in").select("gb")
         _labeled(app.selectbox, "Remote preference").set_value("Hybrid")
         _labeled(app.text_input, "Add a location").set_value("Karnataka")
         _labeled(app.button, "Add location").click().run()
-        _labeled(app.button, "Continue").click().run()
-        assert "Profile summary" in _markdown(app)
         _labeled(app.button, "Save Changes").click().run()
 
     patches = [call[2] for call in calls if call[0] == "PATCH"]

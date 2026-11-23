@@ -164,17 +164,15 @@ def test_profile_form_keeps_the_create_payload():
     with _mocked_app("My Profile", auth_token="test-token", candidate_id=4) as (app, calls):
         text = _markdown(app)
         assert "<p class='section-label profile-card profile-builder'>Education and background</p>" in text
-        assert "1. Education" in text
+        assert "<p class='section-label profile-card'>Personal details</p>" in text
+        assert "<p class='section-label profile-account'>Account</p>" in text
 
         _labeled(app.text_input, "Name").set_value("Ada Lovelace")
         _labeled(app.text_input, "Email").set_value("Ada@Example.com")
         _labeled(app.selectbox, "Education").set_value("B.Tech")
         _labeled(app.selectbox, "Years of experience").set_value(3)
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.multiselect, "Skills").select("Python").select("SQL")
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.multiselect, "Preferred roles").select("Data Analyst")
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.multiselect, "Preferred locations").select("Bengaluru")
         _labeled(app.button, "Save Changes").click().run()
 
@@ -218,7 +216,6 @@ def test_profile_form_keeps_the_create_payload():
 def test_profile_custom_entries_and_validation_stay_mocked():
     """Custom education and skills are sent as plain text. Invalid input makes no request."""
     with _mocked_app("My Profile", auth_token="test-token", candidate_id=4) as (app, calls):
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.text_input, "Add a skill").set_value("  Fortran  ")
         _labeled(app.button, "Add skill").click().run()
         assert not app.exception, app.exception
@@ -234,7 +231,6 @@ def test_profile_custom_entries_and_validation_stay_mocked():
         assert any("Enter a skill to add." in item.value for item in app.warning)
         assert "Fortran" in _labeled(app.multiselect, "Skills").value
 
-        _labeled(app.button, "Back").click().run()
         _labeled(app.text_input, "Name").set_value("Ada Lovelace")
         _labeled(app.text_input, "Email").set_value("not-an-email")
         _labeled(app.button, "Save Changes").click().run()
@@ -245,10 +241,7 @@ def test_profile_custom_entries_and_validation_stay_mocked():
         _labeled(app.selectbox, "Education").set_value("Other").run()
         _labeled(app.text_input, "Custom education").set_value("B.A. Mathematics")
         _labeled(app.selectbox, "Years of experience").set_value(1)
-        _labeled(app.button, "Continue").click().run()
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.multiselect, "Preferred roles").select("Data Analyst")
-        _labeled(app.button, "Continue").click().run()
         _labeled(app.multiselect, "Preferred locations").select("Remote")
         _labeled(app.button, "Save Changes").click().run()
 
@@ -282,11 +275,16 @@ def test_saved_jobs_cards_search_and_sort_stay_mocked():
         text = _markdown(app)
         assert text.index("Zebra Role") < text.index("Alpha Role")
         assert "<h3 class='match-title saved-card discover-card'>Zebra Role</h3>" in text
-        assert "<div class='insight-panel'>Analyze data.</div>" in text
+        assert "<div class='insight-panel'>Analyze data.</div>" not in text
         assert "Saved 2026-11-20 10:00" in text
-        assert '<span class="chip chip-exact">SQL</span>' in text
         assert "Minimum experience: 2 years" in text
+        assert "Salary not provided" not in text
+        assert "Employment type not specified" not in text
+        assert "Removing a saved job is not available from the current API." in " ".join(
+            item.value for item in app.caption
+        )
         assert "Unsave" not in " ".join(button.label for button in app.button)
+        assert "Remove" not in " ".join(button.label for button in app.button)
         assert ("GET", "http://127.0.0.1:8001/candidates/1/saved-jobs", None) in calls
         assert not any(method == "POST" for method, _, _ in calls)
 
@@ -392,14 +390,17 @@ def test_saved_jobs_use_three_card_rows_and_open_the_same_details():
         assert not app.exception, app.exception
         text = _markdown(app)
         assert text.count("<h3 class='match-title saved-card discover-card'>") == 4
+        assert "Principal Applied Machine Learning Engineer for Customer Platforms" in text
         assert "Match 82" in text
+        assert "Strong match" in text
         assert text.count("Not ranked yet") == 3
-        assert "+2 more in details" in text
+        assert "+2 more in details" not in text
         assert "Tableau" not in text.split("Job details")[0]
         assert long_description not in text
-        assert "…" in text
         assert "Saved 2026-11-21 08:00" in text
+        assert "4 saved jobs · 1 with a match score · 3 not ranked yet" in text
         assert "Unsave" not in " ".join(button.label for button in app.button)
+        assert any(button.key == "saved-match-1" for button in app.button)
 
         next(button for button in app.button if button.key == "saved-detail-1").click().run()
         opened = _markdown(app)
@@ -408,3 +409,92 @@ def test_saved_jobs_use_three_card_rows_and_open_the_same_details():
         assert "Tableau" in opened
         assert "My Preparation Plan" in opened
         assert sum("/preparation" in url for _, url, _ in calls) == 1
+
+        next(button for button in app.button if button.key == "saved-match-1").click().run()
+        assert app.session_state["nav"] == "Match Insights"
+        assert app.session_state["selected_match_id"] == 11
+
+
+def test_saved_cards_omit_missing_facts_and_keep_real_scores():
+    """Cards use stored facts only. An unmatchable listing does not borrow a score."""
+    saved = [
+        {
+            "id": 7,
+            "created_at": "2026-11-22T12:30:00",
+            "job": {
+                "id": 70,
+                "title": "Support Analyst",
+                "company": "Fabrikam",
+                "location": "Manchester",
+                "source": "adzuna",
+                "source_country": "gb",
+                "source_url": "https://www.adzuna.co.uk/jobs/view/70",
+                "category_label": "IT Jobs",
+                "contract_time": "full_time",
+                "salary_min": 30000,
+                "salary_max": 40000,
+                "salary_currency": "GBP",
+                "workplace": "hybrid",
+                "min_experience": 1,
+                "required_skills": ["Excel"],
+                "description": "Answer tickets.",
+            },
+        },
+        {
+            "id": 8,
+            "created_at": "2026-11-22T13:00:00",
+            "job": {
+                "id": 80,
+                "title": "Untitled import",
+                "company": "Northwind",
+                "location": "Leeds",
+                "is_matchable": False,
+                "matchability_reason": "The source did not include required skills.",
+                "required_skills": [],
+                "min_experience": 0,
+                "description": "No requirements were stored.",
+            },
+        },
+    ]
+    with _mocked_app(
+        "Saved Jobs",
+        auth_token="test-token",
+        candidate_id=1,
+        candidate_name="Ada Lovelace",
+        saved_jobs=saved,
+        matches=[
+            {"job": saved[0]["job"], "total_score": 64},
+            {"job": saved[1]["job"], "total_score": 99},
+        ],
+    ) as (app, calls):
+        text = _markdown(app)
+        assert "Manchester · United Kingdom" in text
+        assert "Industry: IT Jobs" in text
+        assert "Employment type: Full-time" in text
+        assert "Salary: 30000–40000 GBP" in text
+        assert "Work arrangement: Hybrid" in text
+        assert "Minimum experience: 1 years" in text
+        assert "View original listing" in text
+        assert "Match 64" in text
+        assert "Good match" in text
+        assert "Match score unavailable" in text
+        assert "The source did not include required skills." in text
+        assert "Match 99" not in text
+        assert "Salary not provided" not in text
+        assert "Experience requirement not specified" not in text
+        assert "Work arrangement not specified" not in text
+        assert "Employment type not specified" not in text
+        assert "2 saved jobs · 1 with a match score · 1 without a match score" in text
+        assert not any(method != "GET" for method, _, _ in calls)
+        labels = " ".join(button.label for button in app.button)
+        assert "Unsave" not in labels
+        assert "Remove" not in labels
+        assert any(button.key == "saved-match-7" for button in app.button)
+        assert not any(button.key == "saved-match-8" for button in app.button)
+
+    css = Path(__file__).resolve().parent.joinpath("theme.py").read_text(encoding="utf-8")
+    assert ".saved-summary-line" in css
+    assert "color: var(--text-secondary)" in css
+    assert "color: var(--text-muted)" in css
+    assert "#6D62C8" not in css
+    assert "#F4F2FB" not in css

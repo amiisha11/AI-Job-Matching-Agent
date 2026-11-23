@@ -21,7 +21,19 @@ from pages import page_discover, page_home, page_matches, page_profile, page_sav
 from resume_centre import page_resume
 from theme import inject_theme
 
-st.set_page_config(page_title="AI Job Matching Agent", page_icon="💼", layout="wide")
+st.set_page_config(
+    page_title="AI Job Matching Agent",
+    page_icon="💼",
+    layout="wide",
+    menu_items={
+        "Get help": "https://github.com/amiisha11/AI-Job-Matching-Agent",
+        "Report a bug": None,
+        "About": (
+            "AI Job Matching Agent. Choose System, Light, or Dark from this menu. "
+            "The source is on GitHub."
+        ),
+    },
+)
 
 for key, value in {
     "candidate_id": None,

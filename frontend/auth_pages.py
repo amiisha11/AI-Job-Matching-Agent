@@ -292,9 +292,10 @@ def render_change_password() -> None:
     with st.container(border=True):
         st.markdown(
             (
+                "<div class='password-form'></div>"
                 "<p class='section-label'>Change password</p>"
-                "<p class='form-hint'>Enter the password you use to log in, then choose a new one. "
-                "Other signed-in browsers will need to log in again.</p>"
+                "<p class='form-hint'>Enter the current password, then a new password of 8 to 128 characters, "
+                "and confirm it. Other signed-in browsers will need to log in again. This session stays signed in.</p>"
             ),
             unsafe_allow_html=True,
         )
@@ -318,7 +319,8 @@ def page_login(status: dict | None, status_error: str | None) -> None:
                 "<div class='auth-brand'><span class='sidebar-mark'>AJ</span><span>AI Job Matching</span></div>"
                 "<p class='section-label auth-card'>Sign in</p>"
                 "<p class='form-hint'>Use the email and password from Sign Up. "
-                "A profile without a password uses Account setup to verify the email.</p>"
+                "A profile without a password uses Account setup to verify the email. "
+                "Forgot password is for an account that already has one.</p>"
                 f"<p class='status-line'>{_status_line(status, status_error)}</p>"
             ),
             unsafe_allow_html=True,
@@ -348,7 +350,8 @@ def page_signup(status: dict | None, status_error: str | None) -> None:
             (
                 "<div class='auth-brand'><span class='sidebar-mark'>AJ</span><span>AI Job Matching</span></div>"
                 "<p class='section-label auth-card'>Sign up</p>"
-                "<p class='form-hint'>Use at least 8 characters. You can add skills and preferences after this.</p>"
+                "<p class='form-hint'>Use 8 to 128 characters, then enter the same password again. "
+                "You can add skills and preferences after this.</p>"
                 f"<p class='status-line'>{_status_line(status, status_error)}</p>"
             ),
             unsafe_allow_html=True,
@@ -385,8 +388,9 @@ def page_setup(status: dict | None, status_error: str | None) -> None:
             (
                 "<div class='auth-brand'><span class='sidebar-mark'>AJ</span><span>AI Job Matching</span></div>"
                 "<p class='section-label auth-card'>Account setup</p>"
-                "<p class='form-hint'>Enter the email on the existing profile. "
-                "A six-digit code confirms that you can read that inbox.</p>"
+                "<p class='form-hint'>1. Enter the registered email. 2. Request a code. "
+                "3. Enter the six-digit code. 4. Set a password of 8 to 128 characters. "
+                "5. Confirm it. The code expires in 10 minutes and can be requested again after 60 seconds.</p>"
                 f"<p class='status-line'>{_status_line(status, status_error)}</p>"
             ),
             unsafe_allow_html=True,
@@ -433,7 +437,10 @@ def page_forgot(status: dict | None, status_error: str | None) -> None:
             (
                 "<div class='auth-brand'><span class='sidebar-mark'>AJ</span><span>AI Job Matching</span></div>"
                 "<p class='section-label auth-card'>Forgot password</p>"
-                "<p class='form-hint'>Enter the account email. A six-digit code confirms that you can read that inbox.</p>"
+                "<p class='form-hint'>1. Enter the account email. 2. Request a code. "
+                "3. Enter the six-digit code. 4. Choose a new password of 8 to 128 characters. "
+                "5. Confirm it. A successful reset returns you to login. "
+                "The code expires in 10 minutes and can be requested again after 60 seconds.</p>"
                 f"<p class='status-line'>{_status_line(status, status_error)}</p>"
             ),
             unsafe_allow_html=True,

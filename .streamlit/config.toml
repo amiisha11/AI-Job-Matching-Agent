@@ -1,7 +1,115 @@
+# Shared options only. base is omitted so the app menu can offer
+# System, Light, and Dark. Font stays here because it is global.
+# The app menu is left on Streamlit's default so the theme selector stays available.
+
 [theme]
-base = "light"
-primaryColor = "#6D62C8"
-backgroundColor = "#F4F2FB"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#1B2A4A"
 font = "sans serif"
+
+[theme.light]
+primaryColor = "#397D68"
+backgroundColor = "#F3F6F3"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#202923"
+borderColor = "#DCE5DF"
+linkColor = "#397D68"
+chartCategoricalColors = [
+    "#397D68",
+    "#8FA89C",
+    "#C5D1CB",
+    "#18211E",
+    "#2F7D4A",
+    "#A16207",
+    "#B42318",
+    "#5F6D65",
+]
+chartSequentialColors = [
+    "#F3F6F3",
+    "#E6F0EB",
+    "#DCE5DF",
+    "#C5D1CB",
+    "#8FA89C",
+    "#75A995",
+    "#397D68",
+    "#2F6B59",
+    "#203A34",
+    "#18211E",
+]
+chartDivergingColors = [
+    "#7A2E2A",
+    "#B42318",
+    "#D46A62",
+    "#F0C9C4",
+    "#F8FAF8",
+    "#E6F0EB",
+    "#8FA89C",
+    "#397D68",
+    "#2F6B59",
+    "#18211E",
+]
+
+[theme.dark]
+primaryColor = "#75A995"
+backgroundColor = "#090B0E"
+secondaryBackgroundColor = "#171B20"
+textColor = "#F2F5F2"
+borderColor = "#303740"
+linkColor = "#75A995"
+codeBackgroundColor = "#202630"
+codeTextColor = "#F2F5F2"
+greenColor = "#8ED4A8"
+redColor = "#F0B4AE"
+yellowColor = "#E6C27A"
+orangeColor = "#E6C27A"
+blueColor = "#75A995"
+violetColor = "#8FA89C"
+grayColor = "#87928C"
+chartCategoricalColors = [
+    "#75A995",
+    "#C5D1CB",
+    "#8FA89C",
+    "#F2F5F2",
+    "#8ED4A8",
+    "#E6C27A",
+    "#F0B4AE",
+    "#8DBBA9",
+]
+chartSequentialColors = [
+    "#090B0E",
+    "#171B20",
+    "#202630",
+    "#203A34",
+    "#397D68",
+    "#75A995",
+    "#8DBBA9",
+    "#C5D1CB",
+    "#E6F0EB",
+    "#F2F5F2",
+]
+chartDivergingColors = [
+    "#F0B4AE",
+    "#D46A62",
+    "#A14B45",
+    "#5C3030",
+    "#171B20",
+    "#203A34",
+    "#397D68",
+    "#75A995",
+    "#C5D1CB",
+    "#F2F5F2",
+]
+
+[theme.light.sidebar]
+primaryColor = "#8DBBA9"
+backgroundColor = "#18211E"
+secondaryBackgroundColor = "#202630"
+textColor = "#F2F5F2"
+borderColor = "#303740"
+linkColor = "#E6F0EB"
+
+[theme.dark.sidebar]
+primaryColor = "#75A995"
+backgroundColor = "#090B0E"
+secondaryBackgroundColor = "#171B20"
+textColor = "#F2F5F2"
+borderColor = "#303740"
+linkColor = "#75A995"

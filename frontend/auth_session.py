@@ -137,6 +137,7 @@ def _clear_resume_state() -> None:
     st.session_state.resume_match = None
     st.session_state.resume_signature = None
     st.session_state.resume_error = None
+    st.session_state.resume_notice = None
     st.session_state.resume_uploader = int(st.session_state.get("resume_uploader") or 0) + 1
     for key in list(st.session_state.keys()):
         if str(key).startswith(("resume-file-", "resume-job", "resume-improve-")) or key == "resume-section":

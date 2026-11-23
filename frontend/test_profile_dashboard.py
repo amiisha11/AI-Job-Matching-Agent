@@ -165,8 +165,7 @@ def test_profile_dashboard_shows_the_saved_profile():
         assert "Categories and proficiency levels are not stored" in text
         assert "Beginner" not in text
         assert any(button.label == "Save Changes" for button in app.button)
-        assert any(button.label == "Continue" for button in app.button)
-        _labeled(app.button, "Continue").click().run()
+        assert any(button.label == "Cancel" for button in app.button)
         assert _labeled(app.multiselect, "Skills").label == "Skills"
         assert not any("/candidates/" in url for _, url, _ in calls)
 
@@ -204,6 +203,18 @@ def test_missing_profile_does_not_invent_a_percentage():
         assert "<span class='ring-label'>" not in text
         assert any(button.label == "Save Changes" for button in app.button)
         assert not any(url.endswith("/candidates/4") for _, url, _ in calls)
+
+
+def test_cancel_restores_the_saved_profile_without_a_request():
+    with _profile_app(FULL_PROFILE) as (app, calls):
+        _labeled(app.text_input, "Name").set_value("Grace Hopper")
+        _labeled(app.button, "Remove Python").click().run()
+        assert _labeled(app.multiselect, "Skills").value == ["SQL"]
+        _labeled(app.button, "Cancel").click().run()
+        assert _labeled(app.text_input, "Name").value == "Ada Lovelace"
+        assert _labeled(app.multiselect, "Skills").value == ["Python", "SQL"]
+        assert any("Edits discarded." in item.value for item in app.info)
+        assert not any(method == "PATCH" for method, _, _ in calls)
 
 
 def test_profile_save_error_leaves_the_stored_profile_unchanged():
